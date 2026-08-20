@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#0d110d">
 <title>MapeiaAgro Campo</title>
+<!-- instalável na tela inicial e capaz de abrir sem internet; ver campo-pwa/ -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icone-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MapeiaAgro">
+<meta name="mobile-web-app-capable" content="yes">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root{
@@ -224,6 +231,14 @@
   <div class="linhab"><button class="bs pri" id="semGpsOk">Entendi</button></div>
 </div>
 
+<div class="cartao" id="cMapa">
+  <h3>Guardar o mapa para o campo</h3>
+  <div class="grande" id="mapaTotal">—</div>
+  <p id="mapaDet">—</p>
+  <div class="obs" id="mapaObs"></div>
+  <div class="linhab" id="mapaBotoes"></div>
+</div>
+
 <div class="cartao" id="cGps">
   <h3>Sobre estes números</h3>
   <p><b>Altitude</b> vem do GPS e é a medida menos confiável que ele dá — costuma errar 2 a 3 vezes mais que a posição no plano.</p>
@@ -320,7 +335,11 @@ function toast(t,ms){
 const map=L.map('mapa',{zoomControl:false,attributionControl:false,maxZoom:22,
   tap:true,zoomSnap:.5}).setView([-16.9,-54.67],13);
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-  {maxZoom:22,maxNativeZoom:18}).addTo(map);
+  /* maxNativeZoom 17, nao 18: MEDIDO que nesta regiao o Esri devolve o ladrilho
+     de "sem cobertura" (2.521 bytes, sempre o mesmo) a partir do z18 — em Sao
+     Paulo ele vai ate 19, aqui para no 17. Com 18 o app mostrava cinza de perto,
+     em vez do z17 real ampliado, justo no zoom de conferir ponto. */
+  {maxZoom:22,maxNativeZoom:17}).addTo(map);
 const rend=L.canvas({padding:.4});
 const camadas={};
 ['projeto','marcas','medida','eu'].forEach(k=>camadas[k]=L.layerGroup().addTo(map));
@@ -337,7 +356,8 @@ const E={
   ptSel:null,        /* ponto escolhido no ajuste */
   editando:null,     /* índice em E.medicoes quando se corrige uma já salva */
   seguindo:true,     /* mapa acompanha o GPS */
-  clima:null         /* {dados,lat,lon,lugar,quando,fonte} */
+  clima:null,        /* {dados,lat,lon,lugar,quando,fonte} */
+  ladrilhos:null     /* {n,bytes} — imagens de satélite guardadas, vindas do sw */
 };
 const ehArea=()=>E.modo==='areaManual'||E.modo==='areaAuto';
 const ehAuto=()=>E.modo==='distAuto'||E.modo==='areaAuto';
@@ -942,7 +962,13 @@ $('bAbrir').onclick=()=>{
       toast('Projeto fechado. O que você marcou não foi perdido.');
     }});
   }
-  menu('Projeto',ops);
+  const g=E.ladrilhos;
+  ops.push({txt:'Guardar o mapa para o campo',
+    sub:g&&g.n?('já guardado: cerca de '+nBR(g.bytes/1048576,1)+' MB de satélite')
+              :'baixe a imagem de satélite antes de sair do sinal',
+    fn:abrirCartaoMapa});
+  if(temAtualizacao)ops.push({txt:'Atualizar o aplicativo',sub:'versão nova pronta',fn:atualizarApp});
+  menu('Projeto e mapa',ops);
 };
 $('gpsFechar').onclick=fechaTudo;
 $('semGpsOk').onclick=fechaTudo;
@@ -1177,6 +1203,167 @@ if(localEhArquivo()){
     toast('Aberto como arquivo: o Android não libera GPS assim. Medir por toques e ver as linhas funcionam.',7000);
   },1500);
 }
+
+/* ============================================================
+   SEM INTERNET
+   O que separa "app instalado" de "atalho para um site" não é a loja: é abrir
+   com o avião ligado. Aqui são duas coisas diferentes, e vale não confundir:
+
+   - o service worker (campo-pwa/sw.js) guarda a PÁGINA e o Leaflet, então o
+     app abre. Isso acontece sozinho, na primeira visita com sinal.
+   - a IMAGEM DE SATÉLITE não vem junto: são milhares de ladrilhos e ninguém
+     baixa o Brasil inteiro por precaução. Ela tem de ser pedida, olhando o
+     talhão, ANTES de sair — é o que "guardar o mapa" faz.
+
+   Sem a segunda parte o app abre no escuro, com as linhas certas sobre um
+   fundo vazio. Funciona, mas ninguém se localiza assim.
+   ============================================================ */
+let swReg=null, temAtualizacao=false;
+if('serviceWorker' in navigator&&location.protocol==='https:'){
+  window.addEventListener('load',async()=>{
+    try{
+      swReg=await navigator.serviceWorker.register('sw.js',{scope:'./'});
+      swReg.addEventListener('updatefound',()=>{
+        const novo=swReg.installing;
+        if(!novo)return;
+        novo.addEventListener('statechange',()=>{
+          /* só é atualização se JÁ havia um controlador: sem isso, a primeira
+             instalação da vida avisaria "versão nova" para quem acabou de abrir */
+          if(novo.state==='installed'&&navigator.serviceWorker.controller){
+            temAtualizacao=true;
+            toast('Versão nova pronta. Abra Projeto e mapa › Atualizar o aplicativo.',6000);
+          }
+        });
+      });
+    }catch(e){}
+  });
+  navigator.serviceWorker.addEventListener('message',ev=>{
+    const d=ev.data||{};
+    if(d.tipo==='LADRILHOS'){E.ladrilhos={n:d.n,bytes:d.bytes};pintarCartaoMapa();}
+  });
+}
+function avisarSw(msg){
+  try{
+    if(navigator.serviceWorker&&navigator.serviceWorker.controller)
+      navigator.serviceWorker.controller.postMessage(msg);
+  }catch(e){}
+}
+function atualizarApp(){
+  if(!swReg||!swReg.waiting){toast('Não há versão nova esperando.');return;}
+  swReg.waiting.postMessage('ASSUMIR');
+  toast('Atualizando…');
+  setTimeout(()=>location.reload(),600);
+}
+
+/* ---- quantos ladrilhos cabem numa área ----
+   Fórmula padrão do Web Mercator. Medido: nesta região o Esri só tem imagem
+   até o z17 — do 18 em diante devolve sempre o mesmo ladrilho de "sem
+   cobertura". Pedir acima disso seria baixar 2,5 KB de cinza centenas de vezes. */
+const ZOOM_MAX_MAPA=17;   /* acima disso so vem "sem cobertura" nesta regiao — ver maxNativeZoom */
+const TETO_PEDIDO=1200;      /* acima disso a espera não vale — ver estimarMapa */
+function xyDoPonto(lat,lon,z){
+  const n=Math.pow(2,z);
+  const x=Math.floor((lon+180)/360*n);
+  const r=lat*Math.PI/180;
+  const y=Math.floor((1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2*n);
+  return [x,y];
+}
+function ladrilhosDaArea(b,zIni,zFim){
+  const lista=[];
+  for(let z=zIni;z<=zFim;z++){
+    const [x1,y1]=xyDoPonto(b.getNorth(),b.getWest(),z);
+    const [x2,y2]=xyDoPonto(b.getSouth(),b.getEast(),z);
+    for(let x=Math.min(x1,x2);x<=Math.max(x1,x2);x++)
+      for(let y=Math.min(y1,y2);y<=Math.max(y1,y2);y++)
+        lista.push('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'
+          +z+'/'+y+'/'+x);
+  }
+  return lista;
+}
+function areaParaGuardar(){
+  /* o talhão aberto manda; sem projeto, o que está na tela */
+  if(E.projeto){
+    try{
+      const bb=L.latLngBounds([]);
+      camadas.projeto.eachLayer(l=>{if(l.getBounds)bb.extend(l.getBounds());});
+      if(bb.isValid())return {b:bb.pad(.15),de:'o talhão aberto'};
+    }catch(e){}
+  }
+  return {b:map.getBounds(),de:'o que está na tela'};
+}
+function estimarMapa(){
+  const {b,de}=areaParaGuardar();
+  /* Sempre do 13, nunca só do zoom em que a pessoa está. Guardar apenas o zoom
+     atual deixa o app cego ao afastar — e afastar para se situar é a primeira
+     coisa que se faz ao chegar no talhão. A 8 KB o ladrilho, a faixa inteira do
+     talhão real custa 51 ladrilhos: mesquinhez que não economiza nada. */
+  const zIni=13;
+  const lista=ladrilhosDaArea(b,zIni,ZOOM_MAX_MAPA);
+  return {lista,de,zIni,z:zIni+'–'+ZOOM_MAX_MAPA};
+}
+/* 8,1 KB por ladrilho: MEDIDO em 48 ladrilhos do talhão real, z15 a z17.
+   O talhão inteiro de 121 ha, do z13 ao z17, dá 51 ladrilhos = 0,4 MB. */
+const KB_LADRILHO=8.1;
+let baixando=false, cancelar=false;
+
+function pintarCartaoMapa(est){
+  const cx=$('mapaBotoes');cx.innerHTML='';
+  const bt=(txt,classe,fn)=>{const b=document.createElement('button');
+    b.className='bs'+(classe?' '+classe:'');b.textContent=txt;b.onclick=fn;cx.appendChild(b);return b;};
+  const g=E.ladrilhos||{n:0,bytes:0};
+  const jaTem=g.n?('Já guardado: '+g.n+' pedaço(s), cerca de '+nBR(g.bytes/1048576,1)+' MB.'):'Nada guardado ainda.';
+  if(baixando)return;                    /* durante a baixa quem manda é guardarMapa */
+  const e=est||estimarMapa();
+  const mb=e.lista.length*KB_LADRILHO/1024;
+  $('mapaTotal').textContent=e.lista.length+' pedaço(s) · ~'+nBR(mb,1)+' MB';
+  $('mapaDet').textContent='Cobrindo '+e.de+', zoom '+e.z+'.';
+  $('mapaObs').textContent=jaTem+' O app em si já abre sem internet; isto aqui é só a imagem de satélite.';
+  if(e.lista.length>TETO_PEDIDO){
+    $('mapaObs').textContent='Área grande demais ('+e.lista.length+' pedaços). Aproxime o mapa no talhão que vai usar e tente de novo.';
+    bt('Fechar','',fechaTudo);
+    if(g.n)bt('Apagar o guardado','perigo',()=>avisarSw('LIMPAR'));
+    return;
+  }
+  bt('⬇ Guardar','pri',()=>guardarMapa(e));
+  if(g.n)bt('Apagar o guardado','perigo',()=>{avisarSw('LIMPAR');toast('Imagens guardadas apagadas.');});
+  bt('Fechar','',fechaTudo);
+}
+async function guardarMapa(e){
+  baixando=true;cancelar=false;
+  const cx=$('mapaBotoes');cx.innerHTML='';
+  const bp=document.createElement('button');bp.className='bs perigo';bp.textContent='Parar';
+  bp.onclick=()=>{cancelar=true;};cx.appendChild(bp);
+  const total=e.lista.length;
+  let feitos=0,falhas=0;
+  $('mapaObs').textContent='Deixe a tela aberta. Dá para parar a qualquer momento — o que já baixou fica guardado.';
+  /* seis por vez: mais que isso a rede de fazenda engasga e começa a estourar
+     prazo, e aí a baixa fica mais lenta do que com menos paralelismo */
+  const fila=e.lista.slice();
+  async function trabalhador(){
+    while(fila.length&&!cancelar){
+      const u=fila.pop();
+      try{const r=await fetch(u,{mode:'no-cors'});if(!r)falhas++;}catch(err){falhas++;}
+      feitos++;
+      if(feitos%4===0||!fila.length){
+        $('mapaTotal').textContent=feitos+' de '+total;
+        $('mapaDet').textContent=Math.round(100*feitos/total)+'%'+(falhas?(' · '+falhas+' falharam'):'');
+      }
+    }
+  }
+  await Promise.all([0,1,2,3,4,5].map(trabalhador));
+  baixando=false;
+  avisarSw('CONTAR');
+  toast(cancelar?('Parado. '+feitos+' pedaço(s) guardados.')
+                :('Mapa guardado: '+feitos+' pedaço(s)'+(falhas?(', '+falhas+' falharam'):'')+'.'),5000);
+  fechaTudo();
+}
+function abrirCartaoMapa(){
+  avisarSw('CONTAR');
+  pintarCartaoMapa();
+  abre('cMapa');
+}
+/* aviso na abertura quando não há sinal: melhor saber antes de tentar usar */
+window.addEventListener('offline',()=>toast('Sem internet. As linhas e as medições funcionam; o satélite só aparece se você guardou antes.',6000));
 
 /* recuperar a sessão: fechar o navegador no meio da roça não pode custar o dia */
 const CHAVE='mapeiaagro_campo';
