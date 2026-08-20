@@ -105,6 +105,17 @@
   .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .item .vl{color:var(--ciano);font-size:10px}
   .item button{background:none;border:0;color:var(--texto2);font:400 14px Inter,system-ui;padding:0 3px;cursor:pointer}
+  .item.vai{cursor:pointer}
+  .item.vai:active{background:rgba(255,255,255,.05)}
+  .item.vai .nm::after{content:' ›';color:var(--verde);font-weight:800}
+
+  /* bolinha de arrastar no ajuste: 24 px de alvo, contra os 6 px que bastam
+     só para marcar onde o ponto está. Dedo não é ponteiro de mouse. */
+  .marca-ed{width:24px;height:24px;border-radius:50%;border:3px solid #fff;
+    background:rgba(63,208,212,.55);box-shadow:0 0 8px rgba(0,0,0,.6);
+    box-sizing:border-box}
+  .marca-ed.sel{background:#f0a92e;border-color:#fff;
+    box-shadow:0 0 0 3px rgba(240,169,46,.35),0 0 8px rgba(0,0,0,.6)}
 
   /* previsão: uma linha por dia, sem moldura por dia */
   .dia{display:flex;align-items:center;gap:7px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.06);
@@ -186,11 +197,8 @@
   <div class="grande" id="medTotal">0 m</div>
   <p id="medDet">—</p>
   <div class="obs" id="medObs"></div>
-  <div class="linhab">
-    <button class="bs" id="medDesfaz">↶ Tirar último</button>
-    <button class="bs pri" id="medOk">✔ Guardar</button>
-    <button class="bs perigo" id="medLimpa">Descartar</button>
-  </div>
+  <!-- os botões mudam com a fase (pronto / coletando / ajustando); ver pintarBotoes -->
+  <div class="linhab" id="medBotoes"></div>
 </div>
 
 <div class="cartao" id="cLista">
@@ -225,7 +233,7 @@
   <p>Este arquivo foi aberto direto do celular, e o navegador do Android <b>não libera GPS para arquivo local</b> — ele nem chega a perguntar.</p>
   <p>Não é problema do seu aparelho nem da permissão: no computador o mesmo arquivo funciona, e é isso que confunde.</p>
   <p>Para o GPS funcionar, esta página precisa ser aberta por um <b>endereço https://</b>. O resto do app — abrir projeto, ver as linhas, medir por toques — funciona normalmente aqui.</p>
-  <div class="obs">Medir andando, marcar ponto e altitude dependem do GPS e ficam de fora até isso.</div>
+  <div class="obs">As medidas automáticas, marcar ponto e altitude dependem do GPS e ficam de fora até isso.</div>
   <div class="linhab"><button class="bs pri" id="semGpsOk">Entendi</button></div>
 </div>
 
@@ -336,13 +344,16 @@ const E={
   pos:null,          /* último fix aceito */
   marcas:[],         /* pontos marcados */
   medicoes:[],       /* medições guardadas: distância e área */
-  modo:null,         /* null | 'toques' | 'andando' | 'areaToques' | 'areaAndando' */
+  modo:null,         /* null | 'distManual' | 'distAuto' | 'areaManual' | 'areaAuto' */
+  fase:null,         /* null | 'pronto' | 'coletando' | 'ajustando' — ver o bloco de medição */
   pts:[],            /* pontos da medição em curso */
+  ptSel:null,        /* ponto escolhido no ajuste */
+  editando:null,     /* índice em E.medicoes quando se corrige uma já salva */
   seguindo:true,     /* mapa acompanha o GPS */
   clima:null         /* {dados,lat,lon,lugar,quando,fonte} */
 };
-const ehArea=()=>E.modo==='areaToques'||E.modo==='areaAndando';
-const ehAndando=()=>E.modo==='andando'||E.modo==='areaAndando';
+const ehArea=()=>E.modo==='areaManual'||E.modo==='areaAuto';
+const ehAuto=()=>E.modo==='distAuto'||E.modo==='areaAuto';
 
 /* ---------------- desenhar o projeto ----------------
    O celular não gera nem exporta linha: para desenhar, ponto a cada 1,4 m é
@@ -457,7 +468,7 @@ function aoPosicionar(p){
   mostrarLeitura();
   desenharEu();
   if(E.seguindo)map.setView([c.latitude,c.longitude],Math.max(map.getZoom(),17),{animate:false});
-  if(ehAndando())pontoDaCaminhada();
+  if(E.fase==='coletando'&&ehAuto())pontoDaCaminhada();
   climaPeloGps();
 }
 /* Erro de GPS precisa dizer O QUE FAZER, não só que falhou.
@@ -503,7 +514,19 @@ function desenharEu(){
 }
 map.on('dragstart',()=>{E.seguindo=false;});
 
-/* ---------------- medição: distância e área ---------------- */
+/* ---------------- medição: distância e área ----------------
+   Três fases, e a separação entre elas é o ponto todo:
+
+     pronto      só a automática passa por aqui — o GPS espera o "Iniciar".
+                 Sem isso, escolher a ferramenta já começava a somar caminho,
+                 e o trecho da moto até o canto do talhão entrava na conta.
+     coletando   junta ponto: por toque (manual) ou pelo GPS (automática).
+     ajustando   ninguém acerta todo ponto de primeira. Aqui as bolinhas
+                 arrastam, dá para tirar uma, e só então é que salva.
+
+   Medição salva volta para esta mesma fase de ajuste (abrirMedicao): quem
+   confere no dia seguinte quer corrigir o canto que ficou torto, não medir
+   tudo de novo. */
 function totalMedida(){
   let t=0;
   for(let i=1;i<E.pts.length;i++)t+=dist(E.pts[i-1],E.pts[i]);
@@ -525,39 +548,103 @@ function pintarMedida(){
   }else if(E.pts.length>1){
     L.polyline(lls,{color:'#3fd0d4',weight:3,renderer:rend}).addTo(camadas.medida);
   }
-  E.pts.forEach((p,i)=>{
-    L.circleMarker([p[1],p[0]],{radius:i===0||i===E.pts.length-1?5:3,color:'#fff',
-      fillColor:'#3fd0d4',fillOpacity:1,weight:2,renderer:rend}).addTo(camadas.medida);
-  });
+  if(E.fase==='ajustando'){
+    /* Bolinha de arrastar precisa de alvo de dedo, não de mira de mouse: 24 px,
+       bem maior que os 6 px que bastam para só marcar onde o ponto está. */
+    E.pts.forEach((p,i)=>{
+      const sel=(E.ptSel===i);
+      const mk=L.marker([p[1],p[0]],{draggable:true,autoPan:true,
+        icon:L.divIcon({className:'',iconSize:[24,24],iconAnchor:[12,12],
+          html:'<div class="marca-ed'+(sel?' sel':'')+'"></div>'})});
+      mk.on('drag',e=>{const ll=e.target.getLatLng();
+        E.pts[i]=[ll.lng,ll.lat,E.pts[i][2]];atualizarNumeros();});
+      mk.on('dragend',()=>{E.ptSel=i;atualizarMedida();});
+      mk.on('click',e=>{L.DomEvent.stop(e);E.ptSel=(E.ptSel===i)?null:i;atualizarMedida();});
+      mk.addTo(camadas.medida);
+    });
+  }else{
+    E.pts.forEach((p,i)=>{
+      L.circleMarker([p[1],p[0]],{radius:i===0||i===E.pts.length-1?5:3,color:'#fff',
+        fillColor:'#3fd0d4',fillOpacity:1,weight:2,renderer:rend}).addTo(camadas.medida);
+    });
+  }
 }
-function atualizarMedida(){
+/* Durante o arrasto só os números mudam. Redesenhar as bolinhas a cada quadro
+   arrancaria de baixo do dedo justamente a que está sendo arrastada. */
+function atualizarNumeros(){
   const area=ehArea();
-  const partes=[];
-  partes.push(E.pts.length+' ponto(s)');
+  const partes=[E.pts.length+' ponto(s)'];
   if(area){
     const a=areaM2(E.pts);
     $('medTotal').textContent=E.pts.length>2?fmtHa(a):'—';
     $('vMed').textContent=E.pts.length>2?(nBR(a/1e4,3)+' ha'):'—';
-    $('rMed').textContent=ehAndando()?'área andando':'área';
+    $('rMed').textContent=ehAuto()?'área automática':'área';
     if(E.pts.length>2)partes.push('perímetro '+fmtD(perimetroM(E.pts)));
     else partes.push('faltam '+(3-E.pts.length)+' para fechar');
   }else{
     const t=totalMedida();
     $('medTotal').textContent=fmtD(t);
     $('vMed').textContent=E.pts.length?fmtD(t):'—';
-    $('rMed').textContent=ehAndando()?'andando':'medição';
+    $('rMed').textContent=ehAuto()?'automática':'medição';
     if(E.pts.length>1)partes.push('último trecho '+fmtD(dist(E.pts[E.pts.length-2],E.pts[E.pts.length-1])));
     if(E.pts.length>1)partes.push('reta entre as pontas '+fmtD(dist(E.pts[0],E.pts[E.pts.length-1])));
   }
   const d=desnivelMedida();
   if(d)partes.push('desnível '+(d.dif>=0?'+':'')+nBR(d.dif,1)+' m');
+  if(E.ptSel!==null&&E.fase==='ajustando')partes.push('ponto '+(E.ptSel+1)+' escolhido');
   $('medDet').textContent=partes.join(' · ');
-  $('medObs').textContent=ehAndando()
-    ? 'Andando: entram só posições melhores que ±'+PREC_MEDIR+' m; o passo mínimo acompanha a precisão.'
-    +(area?' Contorne o talhão — o fechamento é automático.':'')
-    : (area?'Toque nos cantos do talhão. Não precisa fechar: o último liga no primeiro.'
-           :'Toque no mapa para somar pontos.');
+}
+const OBS={
+  pronto:()=>'O GPS só começa a somar quando você tocar em Iniciar. Chegue no ponto de partida antes.',
+  coletando:()=>ehAuto()
+    ? 'Entram só posições melhores que ±'+PREC_MEDIR+' m; o passo mínimo acompanha a precisão.'
+      +(ehArea()?' Contorne o talhão — o fechamento é automático.':'')
+    : (ehArea()?'Toque nos cantos do talhão. Não precisa fechar: o último liga no primeiro.'
+               :'Toque no mapa para somar pontos.'),
+  ajustando:()=>E.ptSel!==null
+    ? 'Arraste para mover. O botão remove o ponto escolhido; toque nele de novo para desmarcar.'
+    : 'Arraste as bolinhas para acertar. Toque numa delas para poder removê-la.'
+};
+function atualizarMedida(){
+  atualizarNumeros();
+  $('medObs').textContent=(OBS[E.fase]||(()=>''))();
+  pintarBotoes();
   pintarMedida();
+}
+/* Os botões mudam com a fase. Montar aqui, em vez de esconder seis botões
+   fixos, é o que mantém o cartão do tamanho do que ele realmente oferece. */
+function pintarBotoes(){
+  const cx=$('medBotoes');cx.innerHTML='';
+  const bt=(txt,classe,fn)=>{
+    const b=document.createElement('button');
+    b.className='bs'+(classe?' '+classe:'');b.textContent=txt;b.onclick=fn;
+    cx.appendChild(b);return b;
+  };
+  if(E.fase==='pronto'){
+    bt('▶ Iniciar','pri',iniciarColeta);
+    bt('Cancelar','',encerrarMedida);
+  }else if(E.fase==='coletando'){
+    const min=ehArea()?3:2;
+    bt(ehAuto()?'■ Concluir medição':'✔ Concluir','pri',()=>{
+      if(E.pts.length<min){toast('Faltam pontos: '+(ehArea()?'a área precisa de 3':'a distância precisa de 2')+'.');return;}
+      E.fase='ajustando';E.ptSel=null;atualizarMedida();
+      toast('Agora arraste as bolinhas para acertar, e depois salve.',4200);
+    });
+    bt('↶ Tirar último','',()=>{E.pts.pop();atualizarMedida();});
+    bt('Descartar','perigo',encerrarMedida);
+  }else if(E.fase==='ajustando'){
+    bt('💾 Salvar','pri',salvarMedida);
+    if(E.ptSel!==null)bt('✕ Remover ponto','',()=>{
+      E.pts.splice(E.ptSel,1);E.ptSel=null;atualizarMedida();
+    });
+    bt('+ Voltar a medir','',()=>{
+      E.fase='coletando';E.ptSel=null;
+      if(ehAuto())ligarGps();
+      atualizarMedida();
+      toast(ehAuto()?'Somando de novo pelo GPS.':'Toque no mapa para somar mais pontos.');
+    });
+    bt('Descartar','perigo',encerrarMedida);
+  }
 }
 function passoExigido(prec){
   /* O passo mínimo TEM de vir da precisão do fix, não de um número fixo.
@@ -579,58 +666,95 @@ function pontoDaCaminhada(){
   atualizarMedida();
 }
 map.on('click',e=>{
-  if(E.modo!=='toques'&&E.modo!=='areaToques')return;
+  if(E.fase!=='coletando'||ehAuto())return;
   E.pts.push([e.latlng.lng,e.latlng.lat,null]);
   atualizarMedida();
 });
 
-const TITULO_MODO={toques:'Medir por toques',andando:'Medindo andando',
-  areaToques:'Área por toques',areaAndando:'Área andando'};
-async function comecarMedida(modo){
-  E.modo=modo;E.pts=[];
+const TITULO_MODO={distManual:'Distância manual',distAuto:'Distância automática',
+  areaManual:'Área manual',areaAuto:'Área automática'};
+function comecarMedida(modo){
+  E.modo=modo;E.pts=[];E.ptSel=null;E.editando=null;
   camadas.medida.clearLayers();
   $('bMedir').classList.add('on');
   $('medTit').textContent=TITULO_MODO[modo];
-  if(ehAndando()){
-    await ligarGps();
-    toast(ehArea()?'Contorne o talhão andando. O passo acompanha a precisão do GPS.'
-                  :'Caminhe. O passo entre pontos acompanha a precisão do GPS.');
-  }
+  /* A automática espera o Iniciar; a manual já pode receber toque. */
+  E.fase=ehAuto()?'pronto':'coletando';
   atualizarMedida();
   abre('cMedir');
 }
+async function iniciarColeta(){
+  E.fase='coletando';E.pts=[];
+  await ligarGps();
+  E.seguindo=true;
+  atualizarMedida();
+  toast(ehArea()?'Contornando o talhão. Toque em Concluir medição quando fechar a volta.'
+                :'Medindo. Toque em Concluir medição quando chegar.',4500);
+}
 function encerrarMedida(){
-  E.pts=[];E.modo=null;camadas.medida.clearLayers();
+  E.pts=[];E.modo=null;E.fase=null;E.ptSel=null;E.editando=null;
+  camadas.medida.clearLayers();
   $('bMedir').classList.remove('on');$('vMed').textContent='—';$('rMed').textContent='medição';
   fechaTudo();
 }
-$('medDesfaz').onclick=()=>{E.pts.pop();atualizarMedida();};
-$('medLimpa').onclick=encerrarMedida;
-$('medOk').onclick=()=>{
+function salvarMedida(){
   const area=ehArea();
-  if(area&&E.pts.length<3){toast('Marque pelo menos 3 cantos para fechar a área.');return;}
-  if(!area&&E.pts.length<2){toast('Marque pelo menos dois pontos.');return;}
+  const min=area?3:2;
+  if(E.pts.length<min){
+    toast(area?'Marque pelo menos 3 cantos para fechar a área.':'Marque pelo menos dois pontos.');
+    return;
+  }
   const d=desnivelMedida();
-  const reg={nome:(area?'Área ':'Medição ')+(E.medicoes.length+1),
+  const antigo=(E.editando!==null)?E.medicoes[E.editando]:null;
+  const reg={
+    nome:antigo?antigo.nome:((area?'Área ':'Medição ')+(E.medicoes.length+1)),
     tipo:area?'area':'distancia',
-    modo:ehAndando()?'andando':'toques',
-    pontos:E.pts.slice(),
+    modo:ehAuto()?'automatica':'manual',
+    pontos:E.pts.map(p=>p.slice()),
     desnivel:d?+d.dif.toFixed(1):null,
-    quando:new Date().toISOString()};
+    quando:antigo&&antigo.quando?antigo.quando:new Date().toISOString(),
+    ajustadoEm:antigo?new Date().toISOString():null
+  };
   if(area){
     const a=areaM2(E.pts);
     reg.hectares=+(a/1e4).toFixed(4);
     reg.perimetro=+perimetroM(E.pts).toFixed(2);
-    reg.metros=reg.perimetro;   /* o computador antigo lê 'metros'; aqui é o contorno */
-    toast('Área guardada: '+fmtHa(a));
+    reg.metros=reg.perimetro;   /* o computador lê 'metros'; aqui é o contorno */
   }else{
     reg.metros=+totalMedida().toFixed(2);
-    toast('Medição guardada: '+fmtD(reg.metros));
   }
-  E.medicoes.push(reg);
+  const eraEdicao=(E.editando!==null);
+  if(eraEdicao){
+    E.medicoes[E.editando]=reg;
+    toast(reg.nome+' corrigida: '+(area?fmtHa(areaM2(E.pts)):fmtD(reg.metros)));
+  }else{
+    E.medicoes.push(reg);
+    toast((area?'Área guardada: '+fmtHa(areaM2(E.pts)):'Medição guardada: '+fmtD(reg.metros)));
+  }
+  guardar();
   encerrarMedida();
-};
-
+  /* quem veio da lista para corrigir volta para a lista, não para o mapa vazio */
+  if(eraEdicao){renderLista();abre('cLista');}
+}
+/* Trazer de volta o que já foi salvo, para conferir ou corrigir. */
+function abrirMedicao(i){
+  const m=E.medicoes[i];
+  if(!m||!m.pontos||m.pontos.length<2){toast('Esta medição não tem pontos para mostrar.');return;}
+  const auto=(m.modo==='automatica'||m.modo==='andando');   /* 'andando' é o nome antigo */
+  E.modo=(m.tipo==='area')?(auto?'areaAuto':'areaManual'):(auto?'distAuto':'distManual');
+  E.fase='ajustando';
+  E.editando=i;E.ptSel=null;
+  E.pts=m.pontos.map(p=>p.slice());
+  E.seguindo=false;
+  $('bMedir').classList.add('on');
+  $('medTit').textContent=m.nome+' · '+TITULO_MODO[E.modo].toLowerCase();
+  try{
+    const b=L.latLngBounds(E.pts.map(p=>[p[1],p[0]]));
+    if(b.isValid())map.fitBounds(b.pad(.25),{maxZoom:19});
+  }catch(e){}
+  atualizarMedida();
+  abre('cMedir');
+}
 /* ---------------- marcar ponto ---------------- */
 $('bMarcar').onclick=async()=>{
   await ligarGps();
@@ -683,19 +807,32 @@ function renderLista(){
   });
   E.medicoes.forEach((m,i)=>{
     const area=m.tipo==='area';
-    const d=document.createElement('div');d.className='item';
+    const d=document.createElement('div');d.className='item vai';
     d.innerHTML='<span class="pt" style="background:'+(area?'#8fd14f':'#3fd0d4')+'"></span>'
-      +'<span class="nm">'+m.nome+' <small style="color:#9db09a">('+(m.modo==='andando'?'andando':'toques')+')</small></span>'
+      +'<span class="nm">'+m.nome+' <small style="color:#9db09a">('+rotuloModo(m)
+        +(m.ajustadoEm?', ajustada':'')+')</small></span>'
       +'<span class="vl">'+(area?(nBR(m.hectares,3)+' ha'):fmtD(m.metros))+'</span>'
       +'<button title="apagar">✕</button>';
-    d.querySelector('button').onclick=()=>{E.medicoes.splice(i,1);renderLista();};
+    /* o item inteiro traz a medição de volta; só o ✕ escapa disso */
+    d.onclick=ev=>{if(ev.target.tagName==='BUTTON')return;abrirMedicao(i);};
+    d.querySelector('button').onclick=ev=>{
+      ev.stopPropagation();
+      if(E.editando===i)encerrarMedida();
+      E.medicoes.splice(i,1);guardar();renderLista();
+    };
     box.appendChild(d);
   });
   const nA=E.medicoes.filter(m=>m.tipo==='area').length;
   $('listaResumo').textContent=E.marcas.length+' ponto(s) · '
-    +(E.medicoes.length-nA)+' medição(ões) · '+nA+' área(s)';
+    +(E.medicoes.length-nA)+' medição(ões) · '+nA+' área(s)'
+    +(E.medicoes.length?' — toque numa para ver e ajustar':'');
   if(!E.marcas.length&&!E.medicoes.length)
     box.innerHTML='<div style="font-size:10.5px;color:#9db09a;padding:4px 0">Nada marcado ainda.</div>';
+}
+/* 'toques'/'andando' são os nomes antigos; sessão guardada antes da mudança
+   ainda abre, e mostra o nome novo. */
+function rotuloModo(m){
+  return (m.modo==='automatica'||m.modo==='andando')?'automática':'manual';
 }
 $('bLista').onclick=()=>{renderLista();abre('cLista');};
 $('listaFechar').onclick=fechaTudo;
@@ -757,11 +894,11 @@ $('bMedir').onclick=()=>{
   if(E.modo){abre('cMedir');return;}
   if($('menu').classList.contains('on')){fecharMenu();return;}
   menu('Medidas',[
-    {txt:'Distância por toques',sub:'toque de ponto em ponto no mapa',fn:()=>comecarMedida('toques')},
-    {txt:'Distância andando',sub:'o GPS soma o caminho enquanto você anda',fn:()=>comecarMedida('andando')},
-    {txt:'Área por toques',sub:'toque nos cantos — fecha sozinho, dá hectares',fn:()=>comecarMedida('areaToques')},
-    {txt:'Área andando',sub:'contorne o talhão a pé ou de moto',fn:()=>comecarMedida('areaAndando')},
-    {txt:'Ver o que já medi',sub:'lista, apagar e enviar ao computador',fn:()=>{renderLista();abre('cLista');}}
+    {txt:'Distância manual',sub:'toque de ponto em ponto no mapa',fn:()=>comecarMedida('distManual')},
+    {txt:'Distância automática',sub:'o GPS soma o caminho — começa no Iniciar',fn:()=>comecarMedida('distAuto')},
+    {txt:'Área manual',sub:'toque nos cantos; fecha sozinho e dá hectares',fn:()=>comecarMedida('areaManual')},
+    {txt:'Área automática',sub:'contorne o talhão — começa no Iniciar',fn:()=>comecarMedida('areaAuto')},
+    {txt:'Ver o que já medi',sub:'tocar numa medição traz ela de volta para ajustar',fn:()=>{renderLista();abre('cLista');}}
   ]);
 };
 $('bEu').onclick=()=>{
