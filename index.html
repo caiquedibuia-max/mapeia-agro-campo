@@ -91,13 +91,6 @@
   .grande{font:800 21px Inter,system-ui;color:#fff;line-height:1.05;margin:1px 0}
   input[type=text]{width:100%;padding:8px;border-radius:8px;border:1px solid var(--borda);
     background:#0d1210;color:var(--texto);font:600 12.5px Inter,system-ui;margin-top:4px}
-  /* nomes prontos numa faixa que rola: em duas fileiras eles comiam 35 px de
-     cartão, e cartão alto no celular é o talhão sumindo da tela */
-  .chips{display:flex;gap:4px;margin-top:5px;overflow-x:auto;padding-bottom:2px}
-  .chips::-webkit-scrollbar{display:none}
-  .chip{flex:0 0 auto;background:var(--painel2);border:1px solid var(--borda);border-radius:13px;
-    color:var(--texto);font:600 10.5px Inter,system-ui;padding:6px 10px;cursor:pointer;white-space:nowrap}
-  .chip:active{background:#2a352a}
   .lista{margin-top:5px}
   .item{display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--borda);
     font:600 10.5px Inter,system-ui}
@@ -109,13 +102,19 @@
   .item.vai:active{background:rgba(255,255,255,.05)}
   .item.vai .nm::after{content:' ›';color:var(--verde);font-weight:800}
 
-  /* bolinha de arrastar no ajuste: 24 px de alvo, contra os 6 px que bastam
-     só para marcar onde o ponto está. Dedo não é ponteiro de mouse. */
-  .marca-ed{width:24px;height:24px;border-radius:50%;border:3px solid #fff;
-    background:rgba(63,208,212,.55);box-shadow:0 0 8px rgba(0,0,0,.6);
+  /* Ajuste: a bolinha cheia é ponto de verdade e arrasta. A apagada, no meio
+     de cada trecho, ainda não existe — tocar nela cria o ponto ali e já deixa
+     escolhido. É o jeito de acrescentar um canto sem refazer a medição. */
+  .marca-ed{width:12px;height:12px;border-radius:50%;border:2px solid #fff;
+    background:rgba(63,208,212,.85);box-shadow:0 0 6px rgba(0,0,0,.6);
     box-sizing:border-box}
-  .marca-ed.sel{background:#f0a92e;border-color:#fff;
-    box-shadow:0 0 0 3px rgba(240,169,46,.35),0 0 8px rgba(0,0,0,.6)}
+  .marca-ed.sel{width:16px;height:16px;background:#f0a92e;border-color:#fff;
+    box-shadow:0 0 0 3px rgba(240,169,46,.35),0 0 6px rgba(0,0,0,.6)}
+  .marca-meio{width:11px;height:11px;border-radius:50%;border:1px dashed rgba(255,255,255,.75);
+    background:rgba(63,208,212,.22);box-sizing:border-box}
+  /* o alvo de dedo é maior que o desenho: a bolinha some no meio de um
+     quadrado transparente de 24-26 px, que é o que o toque realmente pega */
+  .alvo{display:flex;align-items:center;justify-content:center}
 
   /* previsão: uma linha por dia, sem moldura por dia */
   .dia{display:flex;align-items:center;gap:7px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.06);
@@ -166,26 +165,13 @@
 <div id="toast"></div>
 <div id="menu"></div>
 
-<div class="cartao" id="cAbrir">
-  <h3>Abrir projeto</h3>
-  <p>Escolha o arquivo <b>.talhao.json</b> que veio do computador.</p>
-  <input type="file" id="arq" accept=".json,.talhao" style="margin-top:5px;font-size:11px">
-  <div class="obs">Serve o projeto inteiro ou a versão leve, só com talhão e guias.</div>
-  <div class="linhab"><button class="bs" id="abrirFechar">Fechar</button></div>
-</div>
+<!-- fora de cartão: quem escolhe o arquivo é a linha do menu "Abrir" -->
+<input type="file" id="arq" accept=".json,.talhao" style="display:none">
 
+<!-- só o que o menu não dá conta: um nome que não está na lista pronta -->
 <div class="cartao" id="cMarcar">
-  <h3>Marcar este ponto</h3>
-  <p id="marcaOnde">—</p>
-  <input type="text" id="marcaNome" placeholder="nome do ponto" autocomplete="off">
-  <div class="chips">
-    <button class="chip" data-nome="Mata">Mata</button>
-    <button class="chip" data-nome="Poste">Poste</button>
-    <button class="chip" data-nome="Erosão">Erosão</button>
-    <button class="chip" data-nome="Formigueiro">Formigueiro</button>
-    <button class="chip" data-nome="Pedra">Pedra</button>
-    <button class="chip" data-nome="Buraco">Buraco</button>
-  </div>
+  <h3>Nome do ponto</h3>
+  <input type="text" id="marcaNome" placeholder="ex.: cupinzeiro, cocho, mata-burro" autocomplete="off">
   <div class="linhab">
     <button class="bs pri" id="marcaOk">✔ Marcar aqui</button>
     <button class="bs" id="marcaNao">Cancelar</button>
@@ -196,6 +182,7 @@
   <h3 id="medTit">Medir</h3>
   <div class="grande" id="medTotal">0 m</div>
   <p id="medDet">—</p>
+  <input type="text" id="medNome" placeholder="nome do talhão" autocomplete="off" style="display:none">
   <div class="obs" id="medObs"></div>
   <!-- os botões mudam com a fase (pronto / coletando / ajustando); ver pintarBotoes -->
   <div class="linhab" id="medBotoes"></div>
@@ -438,6 +425,7 @@ $('arq').onchange=async e=>{
 const PREC_MAX=25;        /* acima disso o fix é ignorado */
 const PREC_MEDIR=15;      /* medição andando exige melhor que isto */
 const PASSO_MIN=4;        /* piso do passo mínimo na caminhada */
+const MEIOS_ATE=60;       /* acima disso o ajuste não desenha pontos do meio — ver pintarMedida */
 const FATOR_PASSO=1.2;    /* o passo real vem da precisão do fix — ver passoExigido */
 let idWatch=null,wakeLock=null;
 
@@ -549,12 +537,13 @@ function pintarMedida(){
     L.polyline(lls,{color:'#3fd0d4',weight:3,renderer:rend}).addTo(camadas.medida);
   }
   if(E.fase==='ajustando'){
-    /* Bolinha de arrastar precisa de alvo de dedo, não de mira de mouse: 24 px,
-       bem maior que os 6 px que bastam para só marcar onde o ponto está. */
+    /* O alvo de toque não é o desenho: a bolinha tem 12 px à vista e o
+       marcador 26 px de área clicável invisível em volta. Dá para acertar de
+       dedo sem a bolinha grande tapando o canto do talhão que se quer ver. */
     E.pts.forEach((p,i)=>{
       const sel=(E.ptSel===i);
       const mk=L.marker([p[1],p[0]],{draggable:true,autoPan:true,
-        icon:L.divIcon({className:'',iconSize:[24,24],iconAnchor:[12,12],
+        icon:L.divIcon({className:'alvo',iconSize:[26,26],iconAnchor:[13,13],
           html:'<div class="marca-ed'+(sel?' sel':'')+'"></div>'})});
       mk.on('drag',e=>{const ll=e.target.getLatLng();
         E.pts[i]=[ll.lng,ll.lat,E.pts[i][2]];atualizarNumeros();});
@@ -562,6 +551,31 @@ function pintarMedida(){
       mk.on('click',e=>{L.DomEvent.stop(e);E.ptSel=(E.ptSel===i)?null:i;atualizarMedida();});
       mk.addTo(camadas.medida);
     });
+    /* Pontos do meio: apagados, ainda não existem. Tocar num deles insere o
+       ponto ali e já deixa escolhido, para arrastar em seguida.
+
+       Só até MEIOS_ATE pontos. Numa caminhada automática de 200 fixes eles
+       seriam 400 marcadores na tela, e inserir um ponto entre duas posições
+       de GPS a 5 m uma da outra não quer dizer nada. */
+    if(E.pts.length<=MEIOS_ATE){
+      const n=E.pts.length;
+      const ate=(ehArea()&&n>2)?n:n-1;   /* na área o trecho de volta também conta */
+      for(let i=0;i<ate;i++){
+        const a=E.pts[i], b=E.pts[(i+1)%n];
+        const meio=[(a[0]+b[0])/2,(a[1]+b[1])/2];
+        L.marker([meio[1],meio[0]],{
+          icon:L.divIcon({className:'alvo',iconSize:[24,24],iconAnchor:[12,12],
+            html:'<div class="marca-meio"></div>'})})
+          .on('click',e=>{
+            L.DomEvent.stop(e);
+            E.pts.splice(i+1,0,[meio[0],meio[1],null]);
+            E.ptSel=i+1;
+            atualizarMedida();
+            toast('Ponto criado. Arraste para o lugar.',2600);
+          })
+          .addTo(camadas.medida);
+      }
+    }
   }else{
     E.pts.forEach((p,i)=>{
       L.circleMarker([p[1],p[0]],{radius:i===0||i===E.pts.length-1?5:3,color:'#fff',
@@ -608,6 +622,11 @@ const OBS={
 function atualizarMedida(){
   atualizarNumeros();
   $('medObs').textContent=(OBS[E.fase]||(()=>''))();
+  /* O nome só aparece no ajuste. Pedir na hora de escolher a ferramenta seria
+     pedir cedo demais — ninguém sabe o nome do talhão antes de ver quanto deu. */
+  const cn=$('medNome');
+  cn.style.display=(E.fase==='ajustando')?'block':'none';
+  cn.placeholder=ehArea()?'nome do talhão':'nome da medição';
   pintarBotoes();
   pintarMedida();
 }
@@ -675,6 +694,7 @@ const TITULO_MODO={distManual:'Distância manual',distAuto:'Distância automáti
   areaManual:'Área manual',areaAuto:'Área automática'};
 function comecarMedida(modo){
   E.modo=modo;E.pts=[];E.ptSel=null;E.editando=null;
+  $('medNome').value='';
   camadas.medida.clearLayers();
   $('bMedir').classList.add('on');
   $('medTit').textContent=TITULO_MODO[modo];
@@ -693,6 +713,7 @@ async function iniciarColeta(){
 }
 function encerrarMedida(){
   E.pts=[];E.modo=null;E.fase=null;E.ptSel=null;E.editando=null;
+  $('medNome').value='';
   camadas.medida.clearLayers();
   $('bMedir').classList.remove('on');$('vMed').textContent='—';$('rMed').textContent='medição';
   fechaTudo();
@@ -706,8 +727,11 @@ function salvarMedida(){
   }
   const d=desnivelMedida();
   const antigo=(E.editando!==null)?E.medicoes[E.editando]:null;
+  /* o que a pessoa digitou manda; depois o nome que já tinha; e só então um
+     número, que serve para não ficar sem nome nenhum */
+  const digitado=($('medNome').value||'').trim();
   const reg={
-    nome:antigo?antigo.nome:((area?'Área ':'Medição ')+(E.medicoes.length+1)),
+    nome:digitado||(antigo?antigo.nome:((area?'Área ':'Medição ')+(E.medicoes.length+1))),
     tipo:area?'area':'distancia',
     modo:ehAuto()?'automatica':'manual',
     pontos:E.pts.map(p=>p.slice()),
@@ -745,6 +769,7 @@ function abrirMedicao(i){
   E.fase='ajustando';
   E.editando=i;E.ptSel=null;
   E.pts=m.pontos.map(p=>p.slice());
+  $('medNome').value=m.nome||'';
   E.seguindo=false;
   $('bMedir').classList.add('on');
   $('medTit').textContent=m.nome+' · '+TITULO_MODO[E.modo].toLowerCase();
@@ -756,32 +781,38 @@ function abrirMedicao(i){
   abre('cMedir');
 }
 /* ---------------- marcar ponto ---------------- */
-$('bMarcar').onclick=async()=>{
-  await ligarGps();
+const NOMES_PRONTOS=['Mata','Poste','Erosão','Formigueiro','Pedra','Buraco'];
+/* Os nomes prontos sobem como texto e marcam no toque. Antes eram seis botões
+   num cartão: escolher o nome, conferir e confirmar — três toques de luva para
+   registrar um poste. Agora é um. */
+$('bMarcar').onclick=()=>{
+  if($('menu').classList.contains('on')){fecharMenu();return;}
+  /* liga o GPS SEM esperar: o menu tem de subir no toque. Esperar o wakeLock
+     resolver para só então mostrar as opções deixa o botão parecendo morto. */
+  ligarGps();
   const c=E.pos;
-  $('marcaOnde').textContent=c
-    ? ('Aqui: '+c.lat.toFixed(6)+', '+c.lon.toFixed(6)+' · precisão ±'+Math.round(c.accuracy)+' m'
-       +(c.altitude!=null?(' · altitude '+Math.round(c.altitude)+' m'):''))
-    : 'Sem posição ainda — o ponto vai no centro da tela.';
-  $('marcaNome').value='';
-  abre('cMarcar');
+  const onde=c
+    ? ('Marcar aqui · ±'+Math.round(c.accuracy)+' m'
+       +(c.altitude!=null?(' · '+Math.round(c.altitude)+' m de altitude'):''))
+    : 'Marcar no centro da tela — sem GPS ainda';
+  const ops=NOMES_PRONTOS.map(n=>({txt:n,fn:()=>marcarPonto(n)}));
+  ops.push({txt:'Outro nome…',sub:'digitar',fn:()=>{$('marcaNome').value='';abre('cMarcar');}});
+  menu(onde,ops);
 };
-document.querySelectorAll('#cMarcar [data-nome]').forEach(b=>{
-  b.onclick=()=>{$('marcaNome').value=b.dataset.nome;};
-});
-$('marcaOk').onclick=()=>{
+function marcarPonto(nome){
   const c=E.pos;
   const centro=map.getCenter();
   const lat=c?c.lat:centro.lat, lon=c?c.lon:centro.lng;
-  const nome=($('marcaNome').value||'').trim()||('Ponto '+(E.marcas.length+1));
+  nome=(nome||'').trim()||('Ponto '+(E.marcas.length+1));
   E.marcas.push({nome:nome,lat:+lat.toFixed(7),lon:+lon.toFixed(7),
     altitude:c&&c.altitude!=null?+c.altitude.toFixed(1):null,
     precisao:c?+c.accuracy.toFixed(1):null,
     precisaoAlt:c&&c.altitudeAccuracy!=null?+c.altitudeAccuracy.toFixed(1):null,
     doGps:!!c, quando:new Date().toISOString()});
-  desenharMarcas();fechaTudo();
+  desenharMarcas();guardar();fechaTudo();
   toast(nome+' marcado.'+(c?'':' (sem GPS: usei o centro da tela)'));
-};
+}
+$('marcaOk').onclick=()=>marcarPonto($('marcaNome').value);
 $('marcaNao').onclick=fechaTudo;
 function desenharMarcas(){
   camadas.marcas.clearLayers();
@@ -834,9 +865,20 @@ function renderLista(){
 function rotuloModo(m){
   return (m.modo==='automatica'||m.modo==='andando')?'automática':'manual';
 }
-$('bLista').onclick=()=>{renderLista();abre('cLista');};
+$('bLista').onclick=()=>{
+  if($('menu').classList.contains('on')){fecharMenu();return;}
+  const nA=E.medicoes.filter(m=>m.tipo==='area').length;
+  menu('O que você marcou',[
+    {txt:'Ver e ajustar',
+     sub:E.marcas.length+' ponto(s) · '+(E.medicoes.length-nA)+' medição(ões) · '+nA+' área(s)',
+     fn:()=>{renderLista();abre('cLista');}},
+    {txt:'Enviar para o computador',
+     sub:'gera o arquivo para arrastar no MapeiaAgro',
+     fn:enviarPacote}
+  ]);
+};
 $('listaFechar').onclick=fechaTudo;
-$('enviar').onclick=async()=>{
+async function enviarPacote(){
   if(!E.marcas.length&&!E.medicoes.length){toast('Não há nada para enviar.');return;}
   /* Vai só o que o campo produziu. O projeto não volta junto de propósito: os
      dois lados nunca escrevem no mesmo dado, então não existe conflito nem
@@ -856,7 +898,8 @@ $('enviar').onclick=async()=>{
   a.download=nome;a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),4000);
   toast('Arquivo salvo: '+nome);
-};
+}
+$('enviar').onclick=enviarPacote;
 
 /* ---------------- cartões e menu ---------------- */
 function abre(id){
@@ -886,8 +929,21 @@ function fecharMenu(){$('menu').classList.remove('on');}
 $('menu').onclick=fecharMenu;
 map.on('click',()=>fecharMenu());
 
-$('bAbrir').onclick=()=>abre('cAbrir');
-$('abrirFechar').onclick=fechaTudo;
+$('bAbrir').onclick=()=>{
+  if($('menu').classList.contains('on')){fecharMenu();return;}
+  const ops=[{txt:'Abrir projeto do computador',
+    sub:'arquivo .talhao.json — inteiro ou só talhão e guias',
+    fn:()=>$('arq').click()}];
+  if(E.projeto){
+    ops.push({txt:'Enquadrar o talhão na tela',sub:E.nome,fn:()=>{E.seguindo=false;enquadrar();}});
+    ops.push({txt:'Fechar o projeto',sub:'as suas marcações continuam aqui',fn:()=>{
+      E.projeto=null;E.nome='';camadas.projeto.clearLayers();
+      $('titulo').textContent='MapeiaAgro Campo — abra um projeto';
+      toast('Projeto fechado. O que você marcou não foi perdido.');
+    }});
+  }
+  menu('Projeto',ops);
+};
 $('gpsFechar').onclick=fechaTudo;
 $('semGpsOk').onclick=fechaTudo;
 $('bMedir').onclick=()=>{
