@@ -1,0 +1,1012 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0d110d">
+<title>MapeiaAgro Campo</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --painel:#161b16; --painel2:#1f261f; --borda:#2e392e;
+    --texto:#e8efe6; --texto2:#9db09a;
+    --verde:#5f9e6f; --ambar:#c9a55c; --ciano:#6fb3ae; --vermelho:#c4685c;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+    -webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:#0d110d;color:var(--texto);overscroll-behavior:none}
+  #mapa{position:absolute;inset:0;background:#0d110d}
+
+  /* ---------- topo ----------
+     Duas faixas separadas de propósito. A do tempo não tem fundo nenhum — só
+     sombra no texto — porque ela fica ligada o tempo todo e um painel ali em
+     cima come a vista do talhão. A do GPS ganha um véu suave, que aparece e
+     some, porque os números dela precisam ser lidos de relance sob sol. */
+  #topo{position:absolute;top:0;left:0;right:0;z-index:600;pointer-events:none}
+  #clima{display:flex;align-items:center;gap:6px;pointer-events:auto;cursor:pointer;
+    padding:calc(env(safe-area-inset-top) + 5px) 11px 2px;
+    font:600 11px Inter,system-ui;color:#eef4ec;white-space:nowrap;overflow:hidden;
+    text-shadow:0 1px 5px rgba(0,0,0,.95),0 0 3px rgba(0,0,0,.85)}
+  #climaIco{font-size:14px;line-height:1}
+  #clima b{font:800 12.5px Inter,system-ui;color:#fff}
+  #clima .sep{color:rgba(255,255,255,.3)}
+  #clima .cid{color:#c3d2c0;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  #clima.velho b,#clima.velho #climaIco{opacity:.6}
+
+  #infoBloco{padding:2px 11px 12px;
+    background:linear-gradient(180deg,transparent,rgba(13,17,13,.86) 26%,rgba(13,17,13,.66) 72%,transparent)}
+  #titulo{font:700 11.5px Inter,system-ui;color:var(--texto);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #leitura{display:flex;gap:11px;margin-top:3px;flex-wrap:wrap;pointer-events:auto}
+  .cel{display:flex;flex-direction:column;line-height:1.1}
+  .cel b{font:800 14px Inter,system-ui;color:#fff}
+  .cel span{font:600 8.5px Inter,system-ui;color:var(--texto2);letter-spacing:.03em;text-transform:uppercase}
+  .cel.fraco b{color:var(--ambar)}
+  .cel.ruim b{color:var(--vermelho)}
+
+  /* ---------- barra de baixo ---------- */
+  #barra{position:absolute;left:0;right:0;bottom:0;z-index:760;display:flex;gap:4px;
+    padding:5px 6px calc(env(safe-area-inset-bottom) + 5px);
+    background:linear-gradient(0deg,rgba(13,17,13,.96),rgba(13,17,13,.84) 60%,transparent)}
+  .bt{flex:1;min-height:42px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    background:var(--painel);border:1px solid var(--borda);border-radius:10px;color:var(--texto);
+    font:600 9.5px Inter,system-ui;cursor:pointer;padding:4px 2px;user-select:none}
+  .bt:active{background:var(--painel2)}
+  .bt.on{border-color:var(--verde);background:#17251a;color:#cfe9d6}
+  .bt svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7;
+    stroke-linecap:round;stroke-linejoin:round}
+
+  /* ---------- menu de escritas ----------
+     Escolher ferramenta não merece um quadro. O quadro rouba metade da tela
+     numa mão e some com o talhão bem na hora de decidir o que fazer nele. Aqui
+     sobem só as palavras; o véu atrás existe porque texto branco sobre imagem
+     de satélite não se lê, e não tem borda nem canto arredondado de propósito. */
+  #menu{position:absolute;left:0;right:0;bottom:0;z-index:750;display:none;
+    padding:0 14px calc(env(safe-area-inset-bottom) + 56px);
+    background:linear-gradient(0deg,rgba(8,11,8,.94),rgba(8,11,8,.6) 62%,transparent)}
+  #menu.on{display:block;animation:sobe .16s ease-out}
+  @keyframes sobe{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+  #menu .tit{font:700 9px Inter,system-ui;color:var(--texto2);letter-spacing:.09em;
+    text-transform:uppercase;padding:9px 2px 3px;text-shadow:0 1px 6px rgba(0,0,0,.9)}
+  #menu .op{padding:9px 2px;font:700 14px Inter,system-ui;color:#eaf3e8;cursor:pointer;
+    text-shadow:0 1px 6px rgba(0,0,0,.95);border-bottom:1px solid rgba(255,255,255,.06)}
+  #menu .op:last-child{border-bottom:0}
+  #menu .op:active{color:var(--verde)}
+  #menu .op small{display:block;font:500 9.5px Inter,system-ui;color:var(--texto2);
+    margin-top:1px;text-transform:none;letter-spacing:0}
+
+  /* ---------- cartões (metade do que eram) ---------- */
+  .cartao{position:absolute;left:7px;right:7px;bottom:60px;z-index:700;
+    background:rgba(15,20,15,.97);border:1px solid var(--borda);border-radius:11px;padding:8px 9px;
+    display:none;box-shadow:0 8px 30px rgba(0,0,0,.6);max-height:52vh;overflow-y:auto}
+  .cartao.on{display:block}
+  .cartao h3{font:700 11px Inter,system-ui;margin-bottom:2px;color:var(--verde)}
+  .cartao p{font:500 10px Inter,system-ui;color:#fff;line-height:1.35;margin:2px 0}
+  .cartao .obs{font:500 9px Inter,system-ui;color:var(--texto2);line-height:1.35;margin-top:4px}
+  .linhab{display:flex;gap:4px;margin-top:5px;flex-wrap:wrap}
+  .bs{flex:1;min-width:58px;min-height:30px;background:var(--painel2);border:1px solid var(--borda);
+    border-radius:8px;color:var(--texto);font:600 10.5px Inter,system-ui;cursor:pointer;padding:0 4px}
+  .bs:active{background:#2a352a}
+  .bs.pri{background:var(--verde);border-color:var(--verde);color:#0e1a10;font-weight:800}
+  .bs.perigo{background:#3a1f1c;border-color:#6b3730;color:#f0b3aa}
+  .grande{font:800 21px Inter,system-ui;color:#fff;line-height:1.05;margin:1px 0}
+  input[type=text]{width:100%;padding:8px;border-radius:8px;border:1px solid var(--borda);
+    background:#0d1210;color:var(--texto);font:600 12.5px Inter,system-ui;margin-top:4px}
+  /* nomes prontos numa faixa que rola: em duas fileiras eles comiam 35 px de
+     cartão, e cartão alto no celular é o talhão sumindo da tela */
+  .chips{display:flex;gap:4px;margin-top:5px;overflow-x:auto;padding-bottom:2px}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{flex:0 0 auto;background:var(--painel2);border:1px solid var(--borda);border-radius:13px;
+    color:var(--texto);font:600 10.5px Inter,system-ui;padding:6px 10px;cursor:pointer;white-space:nowrap}
+  .chip:active{background:#2a352a}
+  .lista{margin-top:5px}
+  .item{display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--borda);
+    font:600 10.5px Inter,system-ui}
+  .item .pt{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item .vl{color:var(--ciano);font-size:10px}
+  .item button{background:none;border:0;color:var(--texto2);font:400 14px Inter,system-ui;padding:0 3px;cursor:pointer}
+
+  /* previsão: uma linha por dia, sem moldura por dia */
+  .dia{display:flex;align-items:center;gap:7px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.06);
+    font:600 10.5px Inter,system-ui}
+  .dia:last-child{border-bottom:0}
+  .dia .d{width:46px;color:var(--texto2);text-transform:capitalize}
+  .dia .i{width:16px;font-size:13px;text-align:center}
+  .dia .t{flex:1;color:#fff}
+  .dia .t i{color:var(--texto2);font-style:normal}
+  .dia .c{width:34px;text-align:right;color:var(--ciano);font-size:9.5px}
+  .dia .w{width:48px;text-align:right;color:var(--texto2);font-size:9.5px}
+  .cidres{padding:6px 2px;border-bottom:1px solid var(--borda);font:600 11px Inter,system-ui;cursor:pointer}
+  .cidres:active{color:var(--verde)}
+  .cidres small{display:block;font:500 9px Inter,system-ui;color:var(--texto2)}
+
+  #toast{position:absolute;left:50%;transform:translateX(-50%);bottom:72px;z-index:800;
+    background:rgba(13,17,13,.96);border:1px solid var(--borda);border-radius:9px;padding:7px 11px;
+    font:600 11px Inter,system-ui;display:none;max-width:90%;text-align:center}
+
+  .marca-eu{width:16px;height:16px;border-radius:50%;background:#3fd0d4;border:3px solid #fff;
+    box-shadow:0 0 9px rgba(63,208,212,.9)}
+  .marca-pt{width:12px;height:12px;border-radius:50%;background:#f0a92e;border:2px solid #fff}
+  .rot{background:rgba(13,17,13,.85);border:1px solid var(--ambar);border-radius:6px;
+    padding:1px 5px;font:700 9.5px Inter,system-ui;color:#fff;white-space:nowrap;
+    transform:translate(-50%,-160%);display:inline-block}
+</style>
+</head>
+<body>
+<div id="mapa"></div>
+
+<div id="topo">
+  <div id="clima">
+    <span id="climaIco">·</span><b id="climaT">—</b>
+    <span class="sep">·</span><span id="climaV">—</span>
+    <span class="sep">·</span><span class="cid" id="climaC">tempo</span>
+  </div>
+  <div id="infoBloco">
+    <div id="titulo">MapeiaAgro Campo — abra um projeto</div>
+    <div id="leitura">
+      <div class="cel"><b id="vAlt">—</b><span>altitude</span></div>
+      <div class="cel"><b id="vPrec">—</b><span>precisão</span></div>
+      <div class="cel"><b id="vVel">—</b><span>velocidade</span></div>
+      <div class="cel"><b id="vMed">—</b><span id="rMed">medição</span></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="menu"></div>
+
+<div class="cartao" id="cAbrir">
+  <h3>Abrir projeto</h3>
+  <p>Escolha o arquivo <b>.talhao.json</b> que veio do computador.</p>
+  <input type="file" id="arq" accept=".json,.talhao" style="margin-top:5px;font-size:11px">
+  <div class="obs">Serve o projeto inteiro ou a versão leve, só com talhão e guias.</div>
+  <div class="linhab"><button class="bs" id="abrirFechar">Fechar</button></div>
+</div>
+
+<div class="cartao" id="cMarcar">
+  <h3>Marcar este ponto</h3>
+  <p id="marcaOnde">—</p>
+  <input type="text" id="marcaNome" placeholder="nome do ponto" autocomplete="off">
+  <div class="chips">
+    <button class="chip" data-nome="Mata">Mata</button>
+    <button class="chip" data-nome="Poste">Poste</button>
+    <button class="chip" data-nome="Erosão">Erosão</button>
+    <button class="chip" data-nome="Formigueiro">Formigueiro</button>
+    <button class="chip" data-nome="Pedra">Pedra</button>
+    <button class="chip" data-nome="Buraco">Buraco</button>
+  </div>
+  <div class="linhab">
+    <button class="bs pri" id="marcaOk">✔ Marcar aqui</button>
+    <button class="bs" id="marcaNao">Cancelar</button>
+  </div>
+</div>
+
+<div class="cartao" id="cMedir">
+  <h3 id="medTit">Medir</h3>
+  <div class="grande" id="medTotal">0 m</div>
+  <p id="medDet">—</p>
+  <div class="obs" id="medObs"></div>
+  <div class="linhab">
+    <button class="bs" id="medDesfaz">↶ Tirar último</button>
+    <button class="bs pri" id="medOk">✔ Guardar</button>
+    <button class="bs perigo" id="medLimpa">Descartar</button>
+  </div>
+</div>
+
+<div class="cartao" id="cLista">
+  <h3>O que você marcou</h3>
+  <p id="listaResumo">—</p>
+  <div class="lista" id="listaItens"></div>
+  <div class="linhab">
+    <button class="bs pri" id="enviar">📤 Enviar para o computador</button>
+    <button class="bs" id="listaFechar">Fechar</button>
+  </div>
+  <div class="obs">Vai só o que você marcou aqui — o projeto não é alterado. No computador, abra o MapeiaAgro e arraste este arquivo.</div>
+</div>
+
+<div class="cartao" id="cClima">
+  <h3 id="climaTit">Previsão</h3>
+  <p id="climaAgora">—</p>
+  <div id="climaDias"></div>
+  <div class="obs" id="climaQuando">—</div>
+  <div class="linhab">
+    <button class="bs" id="climaBuscar">🔎 Trocar cidade</button>
+    <button class="bs" id="climaGps">📍 Seguir meu GPS</button>
+    <button class="bs" id="climaFechar">Fechar</button>
+  </div>
+  <div id="climaBusca" style="display:none">
+    <input type="text" id="climaNome" placeholder="nome da cidade" autocomplete="off">
+    <div id="climaAchados"></div>
+  </div>
+</div>
+
+<div class="cartao" id="cSemGps">
+  <h3>O GPS não vai funcionar assim</h3>
+  <p>Este arquivo foi aberto direto do celular, e o navegador do Android <b>não libera GPS para arquivo local</b> — ele nem chega a perguntar.</p>
+  <p>Não é problema do seu aparelho nem da permissão: no computador o mesmo arquivo funciona, e é isso que confunde.</p>
+  <p>Para o GPS funcionar, esta página precisa ser aberta por um <b>endereço https://</b>. O resto do app — abrir projeto, ver as linhas, medir por toques — funciona normalmente aqui.</p>
+  <div class="obs">Medir andando, marcar ponto e altitude dependem do GPS e ficam de fora até isso.</div>
+  <div class="linhab"><button class="bs pri" id="semGpsOk">Entendi</button></div>
+</div>
+
+<div class="cartao" id="cGps">
+  <h3>Sobre estes números</h3>
+  <p><b>Altitude</b> vem do GPS e é a medida menos confiável que ele dá — costuma errar 2 a 3 vezes mais que a posição no plano.</p>
+  <p>Ela é altura sobre o <b>elipsoide WGS84</b>, não sobre o nível do mar. No Brasil isso dá dezenas de metros de diferença para a cota de um mapa topográfico. Serve para saber se está subindo ou descendo, e para comparar dois pontos do mesmo talhão — não para bater com carta topográfica.</p>
+  <p><b>Precisão</b> é o raio em que o aparelho acha que você está. Acima de 15 m a medição andando fica ruim.</p>
+  <div class="linhab"><button class="bs" id="gpsFechar">Entendi</button></div>
+</div>
+
+<div id="barra">
+  <button class="bt" id="bAbrir"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>Abrir</button>
+  <button class="bt" id="bEu"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3"/></svg>Onde estou</button>
+  <button class="bt" id="bMedir"><svg viewBox="0 0 24 24"><path d="M3 17 21 7"/><path d="M5 13l2 3M9 11l2 3M13 9l2 3M17 7l2 3"/></svg>Medidas</button>
+  <button class="bt" id="bMarcar"><svg viewBox="0 0 24 24"><path d="M12 21s7-6.3 7-11a7 7 0 1 0-14 0c0 4.7 7 11 7 11z"/><circle cx="12" cy="10" r="2.4"/></svg>Marcar</button>
+  <button class="bt" id="bLista"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Enviar</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/* ============================================================
+   MapeiaAgro Campo — o companheiro de campo.
+
+   NÃO é o app inteiro no celular. Traçar linha é trabalho de mesa, com mouse e
+   tela grande. O que o celular tem e o computador nunca vai ter é GPS e câmera
+   dentro do talhão — é só isso que este arquivo faz.
+
+   Sem Turf de propósito: a geometria necessária aqui é distância e área de um
+   anel, que cabem em vinte linhas. Baixar 600 KB de biblioteca numa conexão de
+   fazenda para usar duas funções seria caro à toa. Só o Leaflet, que desenha.
+
+   Tela de celular é o recurso mais escasso do app. Duas regras que valem para
+   toda função nova: quem escolhe sobe como TEXTO (menu), não como quadro; e
+   quadro só existe quando há número para ler ou campo para preencher.
+   ============================================================ */
+const $=id=>document.getElementById(id);
+const R_TERRA=6371008.8;   /* raio MEDIO, o mesmo que o Turf usa no computador.
+   Com o raio equatorial (6378137) o celular media 0,12% a mais — 1,2 m por km —
+   e a mesma cerca dava número diferente nas duas telas. Discordância entre as
+   duas pontas destrói confiança mais rápido que erro absoluto. */
+const GRAU=Math.PI/180;
+
+/* distância em metros, esférica. Em talhão (poucos km) a diferença para a
+   fórmula elipsoidal é de centímetros — muito abaixo do erro do próprio GPS. */
+function dist(a,b){
+  const dLat=(b[1]-a[1])*GRAU, dLon=(b[0]-a[0])*GRAU;
+  const lat=(a[1]+b[1])/2*GRAU;
+  const x=dLon*Math.cos(lat), y=dLat;
+  return Math.hypot(x,y)*R_TERRA;
+}
+/* área do anel, em m². Sapateiro num plano métrico local, com o cosseno tomado
+   na latitude MÉDIA do anel — não na do primeiro ponto. Parece detalhe e não é:
+   com o cosseno preso a um canto, um talhão comprido no sentido norte-sul erra
+   proporcional ao quanto o cosseno anda entre as pontas. Na latitude média o
+   erro vira de segunda ordem. O fechamento é implícito: o último ponto liga no
+   primeiro, mesmo que quem mediu não tenha voltado até lá. */
+function areaM2(pts){
+  if(!pts||pts.length<3)return 0;
+  let sLat=0;for(const p of pts)sLat+=p[1];
+  const latM=sLat/pts.length;
+  const kx=Math.cos(latM*GRAU)*R_TERRA*GRAU, ky=R_TERRA*GRAU;
+  const o=pts[0];
+  let s=0;
+  for(let i=0;i<pts.length;i++){
+    const a=pts[i], b=pts[(i+1)%pts.length];
+    const ax=(a[0]-o[0])*kx, ay=(a[1]-o[1])*ky;
+    const bx=(b[0]-o[0])*kx, by=(b[1]-o[1])*ky;
+    s+=ax*by-bx*ay;
+  }
+  return Math.abs(s)/2;
+}
+function perimetroM(pts){
+  if(!pts||pts.length<3)return 0;
+  let t=0;
+  for(let i=0;i<pts.length;i++)t+=dist(pts[i],pts[(i+1)%pts.length]);
+  return t;
+}
+/* Vírgula decimal, como no computador. Ver o mesmo talhão dar "2.4713" numa
+   tela e "2,4713" na outra faz a pessoa desconfiar do número, não do formato. */
+const nBR=(v,c)=>v.toLocaleString('pt-BR',{minimumFractionDigits:c,maximumFractionDigits:c});
+function fmtD(m){
+  if(!isFinite(m))return '—';
+  return m<1000?(nBR(m,m<10?2:1)+' m'):(nBR(m/1000,3)+' km');
+}
+function fmtHa(m2){
+  if(!isFinite(m2))return '—';
+  const ha=m2/1e4;
+  return ha<1?(nBR(m2,0)+' m² ('+nBR(ha,4)+' ha)'):(nBR(ha,4)+' ha');
+}
+function toast(t,ms){
+  const el=$('toast');el.textContent=t;el.style.display='block';
+  clearTimeout(el._h);el._h=setTimeout(()=>el.style.display='none',ms||3200);
+}
+
+/* ---------------- mapa ---------------- */
+const map=L.map('mapa',{zoomControl:false,attributionControl:false,maxZoom:22,
+  tap:true,zoomSnap:.5}).setView([-16.9,-54.67],13);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  {maxZoom:22,maxNativeZoom:18}).addTo(map);
+const rend=L.canvas({padding:.4});
+const camadas={};
+['projeto','marcas','medida','eu'].forEach(k=>camadas[k]=L.layerGroup().addTo(map));
+
+/* ---------------- estado ---------------- */
+const E={
+  nome:'', projeto:null,
+  pos:null,          /* último fix aceito */
+  marcas:[],         /* pontos marcados */
+  medicoes:[],       /* medições guardadas: distância e área */
+  modo:null,         /* null | 'toques' | 'andando' | 'areaToques' | 'areaAndando' */
+  pts:[],            /* pontos da medição em curso */
+  seguindo:true,     /* mapa acompanha o GPS */
+  clima:null         /* {dados,lat,lon,lugar,quando,fonte} */
+};
+const ehArea=()=>E.modo==='areaToques'||E.modo==='areaAndando';
+const ehAndando=()=>E.modo==='andando'||E.modo==='areaAndando';
+
+/* ---------------- desenhar o projeto ----------------
+   O celular não gera nem exporta linha: para desenhar, ponto a cada 1,4 m é
+   desperdício. Rareia para caber e rolar liso numa tela de mão. */
+function rarear(cs,alvo){
+  if(cs.length<=alvo)return cs;
+  const passo=Math.ceil(cs.length/alvo),out=[];
+  for(let i=0;i<cs.length;i+=passo)out.push(cs[i]);
+  if(out[out.length-1]!==cs[cs.length-1])out.push(cs[cs.length-1]);
+  return out;
+}
+function linhaLeaflet(cs,estilo,alvo){
+  const c=rarear(cs,alvo||160);
+  return L.polyline(c.map(p=>[p[1],p[0]]),Object.assign({renderer:rend},estilo));
+}
+function desenharProjeto(){
+  camadas.projeto.clearLayers();
+  const p=E.projeto;
+  if(!p)return;
+  const anel=g=>{
+    if(!g)return [];
+    if(g.type==='Polygon')return g.coordinates;
+    if(g.type==='MultiPolygon')return g.coordinates.reduce((a,b)=>a.concat(b),[]);
+    return [];
+  };
+  if(p.talhao&&p.talhao.geometry)
+    anel(p.talhao.geometry).forEach(r=>linhaLeaflet(r,{color:'#fff',weight:2.5},400).addTo(camadas.projeto));
+  (p.exclusoes||[]).forEach(ex=>{
+    if(ex&&ex.geometry)anel(ex.geometry).forEach(r=>
+      linhaLeaflet(r,{color:'#e05c4b',weight:2,dashArray:'5 4'},200).addTo(camadas.projeto));
+  });
+  (p.bordaduraLinhas||[]).forEach(l=>{
+    if(l&&l.geometry&&l.geometry.coordinates)
+      linhaLeaflet(l.geometry.coordinates,{color:'#f0a92e',weight:1.8}).addTo(camadas.projeto);
+  });
+  (p.grupos||[]).forEach(g=>{
+    (g.linhas||[]).forEach(l=>{
+      if(l&&l.geometry&&l.geometry.coordinates)
+        linhaLeaflet(l.geometry.coordinates,{color:g.cor||'#5f9e6f',weight:1.3}).addTo(camadas.projeto);
+    });
+    if(g.guia&&g.guia.geometry)
+      linhaLeaflet(g.guia.geometry.coordinates,{color:'#3fd0d4',weight:2.2,dashArray:'7 5'}).addTo(camadas.projeto);
+  });
+  (p.referencias||[]).forEach(l=>{
+    if(l&&l.geometry&&l.geometry.coordinates)
+      linhaLeaflet(l.geometry.coordinates,{color:'#f5efad',weight:1.6,dashArray:'6 4'}).addTo(camadas.projeto);
+  });
+}
+function enquadrar(){
+  try{
+    const b=L.latLngBounds([]);
+    camadas.projeto.eachLayer(l=>{if(l.getBounds)b.extend(l.getBounds());});
+    if(b.isValid())map.fitBounds(b.pad(.12));
+  }catch(e){}
+}
+
+/* ---------------- abrir projeto ---------------- */
+function abrirProjeto(txt,nomeArq){
+  let p=null;
+  try{p=JSON.parse(txt);}catch(e){toast('Arquivo não é um projeto válido.');return false;}
+  if(!p||!Array.isArray(p.grupos)){toast('Este arquivo não parece um projeto do MapeiaAgro.');return false;}
+  E.projeto=p;
+  E.nome=(p.nomes&&p.nomes.talhao)||nomeArq||'Projeto';
+  const nLin=(p.grupos||[]).reduce((a,g)=>a+((g.linhas||[]).length),0);
+  $('titulo').textContent=E.nome+' — '+nLin+' linha(s)'+(p.parcial?' · só talhão e guias':'');
+  desenharProjeto();enquadrar();
+  fechaTudo();
+  toast('Projeto aberto: '+E.nome);
+  return true;
+}
+$('arq').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const txt=await f.text();
+  abrirProjeto(txt,f.name.replace(/\.(talhao\.)?json$/i,''));
+  e.target.value='';
+};
+
+/* ---------------- GPS ----------------
+   Filtro em dois níveis: fix com precisão ruim não entra em nada, e para a
+   medição andando ainda exige deslocamento mínimo. Somar posição crua de uma
+   caminhada infla a distância — o ruído do GPS vira metro andado. */
+const PREC_MAX=25;        /* acima disso o fix é ignorado */
+const PREC_MEDIR=15;      /* medição andando exige melhor que isto */
+const PASSO_MIN=4;        /* piso do passo mínimo na caminhada */
+const FATOR_PASSO=1.2;    /* o passo real vem da precisão do fix — ver passoExigido */
+let idWatch=null,wakeLock=null;
+
+function classePrec(m){
+  if(m===null||m===undefined)return '';
+  if(m<=8)return '';
+  if(m<=15)return 'fraco';
+  return 'ruim';
+}
+function mostrarLeitura(){
+  const c=E.pos;
+  if(!c){$('vAlt').textContent='—';$('vPrec').textContent='—';$('vVel').textContent='—';return;}
+  $('vAlt').textContent=(c.altitude===null||c.altitude===undefined)?'—':Math.round(c.altitude)+' m';
+  $('vAlt').parentNode.className='cel '+((c.altitudeAccuracy>20)?'fraco':'');
+  $('vPrec').textContent=(c.accuracy===null||c.accuracy===undefined)?'—':('±'+Math.round(c.accuracy)+' m');
+  $('vPrec').parentNode.className='cel '+classePrec(c.accuracy);
+  const v=c.speed;
+  $('vVel').textContent=(v===null||v===undefined||isNaN(v))?'—':(v*3.6).toFixed(1)+' km/h';
+}
+function aoPosicionar(p){
+  const c=p.coords;
+  if(c.accuracy>PREC_MAX){
+    if(!E.pos)toast('GPS ainda impreciso (±'+Math.round(c.accuracy)+' m). Aguarde a céu aberto.');
+    return;
+  }
+  E.pos={lat:c.latitude,lon:c.longitude,altitude:c.altitude,altitudeAccuracy:c.altitudeAccuracy,
+         accuracy:c.accuracy,speed:c.speed,t:p.timestamp};
+  mostrarLeitura();
+  desenharEu();
+  if(E.seguindo)map.setView([c.latitude,c.longitude],Math.max(map.getZoom(),17),{animate:false});
+  if(ehAndando())pontoDaCaminhada();
+  climaPeloGps();
+}
+/* Erro de GPS precisa dizer O QUE FAZER, não só que falhou.
+   O caso que mais aparece não é permissão negada pelo usuário: é o Chrome do
+   Android recusando geolocalização em página aberta como arquivo local
+   (file://). Ele nem pergunta — nega direto. No Windows o mesmo arquivo
+   pergunta normalmente, o que faz parecer problema do aparelho. */
+function localEhArquivo(){return location.protocol==='file:';}
+function aoFalhar(err){
+  $('bEu').classList.remove('on');
+  if(err.code===1&&localEhArquivo()){
+    abre('cSemGps');
+    return;
+  }
+  const m={1:'Permissão de localização negada. Toque no cadeado ao lado do endereço e libere a localização.',
+           2:'Sem sinal de GPS. Vá para céu aberto e aguarde.',
+           3:'O GPS demorou demais para responder. Tente de novo.'};
+  toast(m[err.code]||('GPS: '+err.message),6000);
+}
+async function ligarGps(){
+  if(!navigator.geolocation){toast('Este aparelho não expõe GPS ao navegador.');return;}
+  if(idWatch!==null)return;
+  idWatch=navigator.geolocation.watchPosition(aoPosicionar,aoFalhar,
+    {enableHighAccuracy:true,maximumAge:1000,timeout:20000});
+  $('bEu').classList.add('on');
+  /* tela apagando no meio de uma medição perde a caminhada */
+  try{if(navigator.wakeLock&&!wakeLock)wakeLock=await navigator.wakeLock.request('screen');}catch(e){}
+}
+function desligarGps(){
+  if(idWatch!==null){navigator.geolocation.clearWatch(idWatch);idWatch=null;}
+  $('bEu').classList.remove('on');
+  camadas.eu.clearLayers();
+  try{if(wakeLock){wakeLock.release();wakeLock=null;}}catch(e){}
+}
+function desenharEu(){
+  camadas.eu.clearLayers();
+  if(!E.pos)return;
+  const ll=[E.pos.lat,E.pos.lon];
+  if(E.pos.accuracy)L.circle(ll,{radius:E.pos.accuracy,color:'#3fd0d4',weight:1,
+    fillColor:'#3fd0d4',fillOpacity:.12,renderer:rend}).addTo(camadas.eu);
+  L.marker(ll,{icon:L.divIcon({className:'',html:'<div class="marca-eu"></div>',
+    iconSize:[16,16],iconAnchor:[8,8]}),interactive:false}).addTo(camadas.eu);
+}
+map.on('dragstart',()=>{E.seguindo=false;});
+
+/* ---------------- medição: distância e área ---------------- */
+function totalMedida(){
+  let t=0;
+  for(let i=1;i<E.pts.length;i++)t+=dist(E.pts[i-1],E.pts[i]);
+  return t;
+}
+function desnivelMedida(){
+  const alts=E.pts.map(p=>p[2]).filter(a=>a!==null&&a!==undefined&&isFinite(a));
+  if(alts.length<2)return null;
+  return {ini:alts[0],fim:alts[alts.length-1],dif:alts[alts.length-1]-alts[0],
+          min:Math.min.apply(null,alts),max:Math.max.apply(null,alts)};
+}
+function pintarMedida(){
+  camadas.medida.clearLayers();
+  if(!E.pts.length)return;
+  const lls=E.pts.map(p=>[p[1],p[0]]);
+  if(ehArea()&&E.pts.length>2){
+    L.polygon(lls,{color:'#3fd0d4',weight:3,fillColor:'#3fd0d4',fillOpacity:.18,
+      renderer:rend}).addTo(camadas.medida);
+  }else if(E.pts.length>1){
+    L.polyline(lls,{color:'#3fd0d4',weight:3,renderer:rend}).addTo(camadas.medida);
+  }
+  E.pts.forEach((p,i)=>{
+    L.circleMarker([p[1],p[0]],{radius:i===0||i===E.pts.length-1?5:3,color:'#fff',
+      fillColor:'#3fd0d4',fillOpacity:1,weight:2,renderer:rend}).addTo(camadas.medida);
+  });
+}
+function atualizarMedida(){
+  const area=ehArea();
+  const partes=[];
+  partes.push(E.pts.length+' ponto(s)');
+  if(area){
+    const a=areaM2(E.pts);
+    $('medTotal').textContent=E.pts.length>2?fmtHa(a):'—';
+    $('vMed').textContent=E.pts.length>2?(nBR(a/1e4,3)+' ha'):'—';
+    $('rMed').textContent=ehAndando()?'área andando':'área';
+    if(E.pts.length>2)partes.push('perímetro '+fmtD(perimetroM(E.pts)));
+    else partes.push('faltam '+(3-E.pts.length)+' para fechar');
+  }else{
+    const t=totalMedida();
+    $('medTotal').textContent=fmtD(t);
+    $('vMed').textContent=E.pts.length?fmtD(t):'—';
+    $('rMed').textContent=ehAndando()?'andando':'medição';
+    if(E.pts.length>1)partes.push('último trecho '+fmtD(dist(E.pts[E.pts.length-2],E.pts[E.pts.length-1])));
+    if(E.pts.length>1)partes.push('reta entre as pontas '+fmtD(dist(E.pts[0],E.pts[E.pts.length-1])));
+  }
+  const d=desnivelMedida();
+  if(d)partes.push('desnível '+(d.dif>=0?'+':'')+nBR(d.dif,1)+' m');
+  $('medDet').textContent=partes.join(' · ');
+  $('medObs').textContent=ehAndando()
+    ? 'Andando: entram só posições melhores que ±'+PREC_MEDIR+' m; o passo mínimo acompanha a precisão.'
+    +(area?' Contorne o talhão — o fechamento é automático.':'')
+    : (area?'Toque nos cantos do talhão. Não precisa fechar: o último liga no primeiro.'
+           :'Toque no mapa para somar pontos.');
+  pintarMedida();
+}
+function passoExigido(prec){
+  /* O passo mínimo TEM de vir da precisão do fix, não de um número fixo.
+     Com ruído de ±8 m, exigir 3 m de deslocamento não filtra nada: quase todo
+     tremor do GPS passa como movimento. Medido numa caminhada simulada de
+     40,1 m com ruído de ~5 m: soma crua 93,5 m, passo fixo de 3 m 85,1 m —
+     cortava 9%. Amarrado à precisão, o ruído deixa de virar metro andado. */
+  return Math.max(PASSO_MIN,(prec||10)*FATOR_PASSO);
+}
+function pontoDaCaminhada(){
+  const c=E.pos;
+  if(!c||c.accuracy>PREC_MEDIR)return;
+  const novo=[c.lon,c.lat,c.altitude];
+  if(E.pts.length){
+    const d=dist(E.pts[E.pts.length-1],novo);
+    if(d<passoExigido(c.accuracy))return;
+  }
+  E.pts.push(novo);
+  atualizarMedida();
+}
+map.on('click',e=>{
+  if(E.modo!=='toques'&&E.modo!=='areaToques')return;
+  E.pts.push([e.latlng.lng,e.latlng.lat,null]);
+  atualizarMedida();
+});
+
+const TITULO_MODO={toques:'Medir por toques',andando:'Medindo andando',
+  areaToques:'Área por toques',areaAndando:'Área andando'};
+async function comecarMedida(modo){
+  E.modo=modo;E.pts=[];
+  camadas.medida.clearLayers();
+  $('bMedir').classList.add('on');
+  $('medTit').textContent=TITULO_MODO[modo];
+  if(ehAndando()){
+    await ligarGps();
+    toast(ehArea()?'Contorne o talhão andando. O passo acompanha a precisão do GPS.'
+                  :'Caminhe. O passo entre pontos acompanha a precisão do GPS.');
+  }
+  atualizarMedida();
+  abre('cMedir');
+}
+function encerrarMedida(){
+  E.pts=[];E.modo=null;camadas.medida.clearLayers();
+  $('bMedir').classList.remove('on');$('vMed').textContent='—';$('rMed').textContent='medição';
+  fechaTudo();
+}
+$('medDesfaz').onclick=()=>{E.pts.pop();atualizarMedida();};
+$('medLimpa').onclick=encerrarMedida;
+$('medOk').onclick=()=>{
+  const area=ehArea();
+  if(area&&E.pts.length<3){toast('Marque pelo menos 3 cantos para fechar a área.');return;}
+  if(!area&&E.pts.length<2){toast('Marque pelo menos dois pontos.');return;}
+  const d=desnivelMedida();
+  const reg={nome:(area?'Área ':'Medição ')+(E.medicoes.length+1),
+    tipo:area?'area':'distancia',
+    modo:ehAndando()?'andando':'toques',
+    pontos:E.pts.slice(),
+    desnivel:d?+d.dif.toFixed(1):null,
+    quando:new Date().toISOString()};
+  if(area){
+    const a=areaM2(E.pts);
+    reg.hectares=+(a/1e4).toFixed(4);
+    reg.perimetro=+perimetroM(E.pts).toFixed(2);
+    reg.metros=reg.perimetro;   /* o computador antigo lê 'metros'; aqui é o contorno */
+    toast('Área guardada: '+fmtHa(a));
+  }else{
+    reg.metros=+totalMedida().toFixed(2);
+    toast('Medição guardada: '+fmtD(reg.metros));
+  }
+  E.medicoes.push(reg);
+  encerrarMedida();
+};
+
+/* ---------------- marcar ponto ---------------- */
+$('bMarcar').onclick=async()=>{
+  await ligarGps();
+  const c=E.pos;
+  $('marcaOnde').textContent=c
+    ? ('Aqui: '+c.lat.toFixed(6)+', '+c.lon.toFixed(6)+' · precisão ±'+Math.round(c.accuracy)+' m'
+       +(c.altitude!=null?(' · altitude '+Math.round(c.altitude)+' m'):''))
+    : 'Sem posição ainda — o ponto vai no centro da tela.';
+  $('marcaNome').value='';
+  abre('cMarcar');
+};
+document.querySelectorAll('#cMarcar [data-nome]').forEach(b=>{
+  b.onclick=()=>{$('marcaNome').value=b.dataset.nome;};
+});
+$('marcaOk').onclick=()=>{
+  const c=E.pos;
+  const centro=map.getCenter();
+  const lat=c?c.lat:centro.lat, lon=c?c.lon:centro.lng;
+  const nome=($('marcaNome').value||'').trim()||('Ponto '+(E.marcas.length+1));
+  E.marcas.push({nome:nome,lat:+lat.toFixed(7),lon:+lon.toFixed(7),
+    altitude:c&&c.altitude!=null?+c.altitude.toFixed(1):null,
+    precisao:c?+c.accuracy.toFixed(1):null,
+    precisaoAlt:c&&c.altitudeAccuracy!=null?+c.altitudeAccuracy.toFixed(1):null,
+    doGps:!!c, quando:new Date().toISOString()});
+  desenharMarcas();fechaTudo();
+  toast(nome+' marcado.'+(c?'':' (sem GPS: usei o centro da tela)'));
+};
+$('marcaNao').onclick=fechaTudo;
+function desenharMarcas(){
+  camadas.marcas.clearLayers();
+  E.marcas.forEach(m=>{
+    L.marker([m.lat,m.lon],{icon:L.divIcon({className:'',
+      html:'<div class="marca-pt"></div>',iconSize:[12,12],iconAnchor:[6,6]})}).addTo(camadas.marcas);
+    L.marker([m.lat,m.lon],{interactive:false,icon:L.divIcon({className:'',
+      html:'<div class="rot">'+m.nome+'</div>',iconSize:[0,0],iconAnchor:[0,0]})}).addTo(camadas.marcas);
+  });
+}
+
+/* ---------------- lista e envio ---------------- */
+function renderLista(){
+  const box=$('listaItens');box.innerHTML='';
+  E.marcas.forEach((m,i)=>{
+    const d=document.createElement('div');d.className='item';
+    d.innerHTML='<span class="pt" style="background:#f0a92e"></span>'
+      +'<span class="nm">'+m.nome+'</span>'
+      +'<span class="vl">'+(m.altitude!=null?Math.round(m.altitude)+' m':'—')+'</span>'
+      +'<button title="apagar">✕</button>';
+    d.querySelector('button').onclick=()=>{E.marcas.splice(i,1);desenharMarcas();renderLista();};
+    box.appendChild(d);
+  });
+  E.medicoes.forEach((m,i)=>{
+    const area=m.tipo==='area';
+    const d=document.createElement('div');d.className='item';
+    d.innerHTML='<span class="pt" style="background:'+(area?'#8fd14f':'#3fd0d4')+'"></span>'
+      +'<span class="nm">'+m.nome+' <small style="color:#9db09a">('+(m.modo==='andando'?'andando':'toques')+')</small></span>'
+      +'<span class="vl">'+(area?(nBR(m.hectares,3)+' ha'):fmtD(m.metros))+'</span>'
+      +'<button title="apagar">✕</button>';
+    d.querySelector('button').onclick=()=>{E.medicoes.splice(i,1);renderLista();};
+    box.appendChild(d);
+  });
+  const nA=E.medicoes.filter(m=>m.tipo==='area').length;
+  $('listaResumo').textContent=E.marcas.length+' ponto(s) · '
+    +(E.medicoes.length-nA)+' medição(ões) · '+nA+' área(s)';
+  if(!E.marcas.length&&!E.medicoes.length)
+    box.innerHTML='<div style="font-size:10.5px;color:#9db09a;padding:4px 0">Nada marcado ainda.</div>';
+}
+$('bLista').onclick=()=>{renderLista();abre('cLista');};
+$('listaFechar').onclick=fechaTudo;
+$('enviar').onclick=async()=>{
+  if(!E.marcas.length&&!E.medicoes.length){toast('Não há nada para enviar.');return;}
+  /* Vai só o que o campo produziu. O projeto não volta junto de propósito: os
+     dois lados nunca escrevem no mesmo dado, então não existe conflito nem
+     "qual versão é a boa". */
+  const pacote={v:1,tipo:'mapeiaagro-campo',talhao:E.nome,
+    quando:new Date().toISOString(),marcas:E.marcas,medicoes:E.medicoes};
+  const txt=JSON.stringify(pacote);
+  const nome='Campo_'+(E.nome||'talhao').replace(/[^\w\-]+/g,'_')+'.campo.json';
+  const arq=new File([txt],nome,{type:'application/json'});
+  if(navigator.canShare&&navigator.canShare({files:[arq]})){
+    try{await navigator.share({files:[arq],title:nome});toast('Enviado.');return;}catch(e){
+      if(e&&e.name==='AbortError')return;
+    }
+  }
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([txt],{type:'application/json'}));
+  a.download=nome;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  toast('Arquivo salvo: '+nome);
+};
+
+/* ---------------- cartões e menu ---------------- */
+function abre(id){
+  fecharMenu();
+  document.querySelectorAll('.cartao').forEach(c=>c.classList.toggle('on',c.id===id));
+}
+function fechaTudo(){
+  fecharMenu();
+  document.querySelectorAll('.cartao').forEach(c=>c.classList.remove('on'));
+}
+/* menu(titulo, [{txt, sub, fn}]) — o padrão para agrupar função nova.
+   Sobe só o texto; escolher fecha. Um toque fora também fecha. */
+function menu(titulo,ops){
+  const m=$('menu');
+  m.innerHTML='';
+  if(titulo){const t=document.createElement('div');t.className='tit';t.textContent=titulo;m.appendChild(t);}
+  ops.forEach(o=>{
+    const d=document.createElement('div');d.className='op';
+    d.innerHTML=o.txt+(o.sub?('<small>'+o.sub+'</small>'):'');
+    d.onclick=ev=>{ev.stopPropagation();fecharMenu();o.fn();};
+    m.appendChild(d);
+  });
+  document.querySelectorAll('.cartao').forEach(c=>c.classList.remove('on'));
+  m.classList.add('on');
+}
+function fecharMenu(){$('menu').classList.remove('on');}
+$('menu').onclick=fecharMenu;
+map.on('click',()=>fecharMenu());
+
+$('bAbrir').onclick=()=>abre('cAbrir');
+$('abrirFechar').onclick=fechaTudo;
+$('gpsFechar').onclick=fechaTudo;
+$('semGpsOk').onclick=fechaTudo;
+$('bMedir').onclick=()=>{
+  if(E.modo){abre('cMedir');return;}
+  if($('menu').classList.contains('on')){fecharMenu();return;}
+  menu('Medidas',[
+    {txt:'Distância por toques',sub:'toque de ponto em ponto no mapa',fn:()=>comecarMedida('toques')},
+    {txt:'Distância andando',sub:'o GPS soma o caminho enquanto você anda',fn:()=>comecarMedida('andando')},
+    {txt:'Área por toques',sub:'toque nos cantos — fecha sozinho, dá hectares',fn:()=>comecarMedida('areaToques')},
+    {txt:'Área andando',sub:'contorne o talhão a pé ou de moto',fn:()=>comecarMedida('areaAndando')},
+    {txt:'Ver o que já medi',sub:'lista, apagar e enviar ao computador',fn:()=>{renderLista();abre('cLista');}}
+  ]);
+};
+$('bEu').onclick=()=>{
+  if(idWatch===null){E.seguindo=true;ligarGps();toast('Procurando GPS…');}
+  else if(!E.seguindo){E.seguindo=true;if(E.pos)map.setView([E.pos.lat,E.pos.lon],Math.max(map.getZoom(),17));}
+  else desligarGps();
+};
+/* tocar na leitura explica de onde vêm os números */
+$('leitura').onclick=()=>abre('cGps');
+
+/* ============================================================
+   TEMPO
+   Uma faixa de uma linha no alto, sem fundo. Quem está no talhão decide
+   pulverizar, plantar ou parar pelo vento e pela chuva do dia — o dado precisa
+   estar à vista sem pedir, e não pode tapar a imagem.
+
+   Open-Meteo: sem chave, sem cadastro, CORS liberado. Vai só a coordenada
+   ARREDONDADA A DUAS CASAS (~1 km) — o modelo não tem resolução melhor que
+   isso, então a posição exata não acrescentaria nada e não precisa sair do
+   aparelho.
+
+   Sem internet o app abre com a última leitura guardada, marcada como velha.
+   Errado seria mostrar um traço: quem está sem sinal ainda quer saber o que
+   dizia a previsão de ontem.
+   ============================================================ */
+const CLIMA_CHAVE='mapeiaagro_clima';
+const CLIMA_VALIDADE=20*60*1000;    /* releitura só depois disto */
+const CLIMA_DISTANCIA=8000;         /* ou se andou mais que isto */
+const CLIMA_VELHO=3*60*60*1000;     /* acima disto a faixa mostra o dado apagado */
+let climaOcupado=false,climaUltimaTentativa=0;
+
+/* Códigos WMO — o que a Open-Meteo devolve. Ícone e nome curto em português. */
+const WMO={
+  0:['☀','sol'],1:['🌤','sol entre nuvens'],2:['⛅','parcialmente nublado'],3:['☁','nublado'],
+  45:['🌫','nevoeiro'],48:['🌫','nevoeiro'],
+  51:['🌦','garoa fraca'],53:['🌦','garoa'],55:['🌦','garoa forte'],
+  56:['🌧','garoa gelada'],57:['🌧','garoa gelada'],
+  61:['🌦','chuva fraca'],63:['🌧','chuva'],65:['🌧','chuva forte'],
+  66:['🌧','chuva gelada'],67:['🌧','chuva gelada'],
+  71:['🌨','neve'],73:['🌨','neve'],75:['🌨','neve forte'],77:['🌨','granizo fino'],
+  80:['🌦','pancadas'],81:['🌧','pancadas'],82:['⛈','pancadas fortes'],
+  85:['🌨','neve'],86:['🌨','neve'],
+  95:['⛈','trovoada'],96:['⛈','trovoada com granizo'],99:['⛈','trovoada com granizo']
+};
+const wmo=c=>WMO[c]||['·','—'];
+
+function climaGuardar(){
+  try{localStorage.setItem(CLIMA_CHAVE,JSON.stringify(E.clima));}catch(e){}
+}
+function climaCarregar(){
+  try{
+    const s=localStorage.getItem(CLIMA_CHAVE);
+    if(s)E.clima=JSON.parse(s);
+  }catch(e){}
+}
+function climaPintarFaixa(){
+  const c=E.clima;
+  if(!c||!c.dados||!c.dados.current){$('climaC').textContent='tempo';return;}
+  const a=c.dados.current;
+  const [ico]=wmo(a.weather_code);
+  $('climaIco').textContent=ico;
+  $('climaT').textContent=Math.round(a.temperature_2m)+'°';
+  $('climaV').textContent=Math.round(a.wind_speed_10m)+' km/h';
+  $('climaC').textContent=c.lugar||'—';
+  const velho=(Date.now()-(c.quando||0))>CLIMA_VELHO;
+  $('clima').classList.toggle('velho',velho);
+}
+function climaQuandoTexto(){
+  const c=E.clima;
+  if(!c||!c.quando)return 'Sem leitura ainda.';
+  const min=Math.round((Date.now()-c.quando)/60000);
+  const q=min<2?'agora há pouco':min<60?('há '+min+' min')
+        :min<1440?('há '+Math.round(min/60)+' h'):('há '+Math.round(min/1440)+' dia(s)');
+  return 'Atualizado '+q+(c.fonte==='gps'?' · pela sua posição':' · cidade escolhida')
+    +(navigator.onLine?'':' · sem internet agora');
+}
+function diaCurto(iso){
+  const [a,m,d]=iso.split('-').map(Number);
+  const dt=new Date(a,m-1,d);   /* montado local: 'new Date(iso)' vira UTC e troca o dia */
+  const sem=['dom','seg','ter','qua','qui','sex','sáb'][dt.getDay()];
+  return sem+' '+d;
+}
+function climaPintarCartao(){
+  const c=E.clima;
+  $('climaTit').textContent='Previsão — '+((c&&c.lugar)||'sem lugar');
+  $('climaQuando').textContent=climaQuandoTexto();
+  const box=$('climaDias');box.innerHTML='';
+  if(!c||!c.dados||!c.dados.daily){
+    $('climaAgora').textContent='Sem dados ainda. Ligue o GPS ou escolha uma cidade.';
+    return;
+  }
+  const a=c.dados.current;
+  if(a){
+    const [ico,nome]=wmo(a.weather_code);
+    $('climaAgora').textContent=ico+' '+nome+' · '+Math.round(a.temperature_2m)+'° · vento '
+      +Math.round(a.wind_speed_10m)+' km/h'
+      +(a.relative_humidity_2m!=null?(' · umidade '+Math.round(a.relative_humidity_2m)+'%'):'');
+  }
+  const d=c.dados.daily;
+  const n=Math.min(7,(d.time||[]).length);
+  for(let i=0;i<n;i++){
+    const [ico]=wmo(d.weather_code[i]);
+    const ch=d.precipitation_probability_max?d.precipitation_probability_max[i]:null;
+    const mm=d.precipitation_sum?d.precipitation_sum[i]:null;
+    const el=document.createElement('div');el.className='dia';
+    el.innerHTML='<span class="d">'+diaCurto(d.time[i])+'</span>'
+      +'<span class="i">'+ico+'</span>'
+      +'<span class="t">'+Math.round(d.temperature_2m_max[i])+'° <i>/ '
+        +Math.round(d.temperature_2m_min[i])+'°</i></span>'
+      +'<span class="c">'+(ch!=null?ch+'%':(mm!=null?mm.toFixed(0)+'mm':'—'))+'</span>'
+      +'<span class="w">'+(d.wind_speed_10m_max?Math.round(d.wind_speed_10m_max[i])+' km/h':'—')+'</span>';
+    box.appendChild(el);
+  }
+}
+function climaPintar(){climaPintarFaixa();if($('cClima').classList.contains('on'))climaPintarCartao();}
+
+async function climaBuscar(lat,lon,lugar,fonte){
+  if(climaOcupado)return;
+  climaOcupado=true;climaUltimaTentativa=Date.now();
+  try{
+    const u='https://api.open-meteo.com/v1/forecast'
+      +'?latitude='+lat.toFixed(2)+'&longitude='+lon.toFixed(2)
+      +'&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m'
+      +'&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,'
+      +'precipitation_probability_max,wind_speed_10m_max'
+      +'&timezone=auto&forecast_days=7';
+    const r=await fetch(u,{cache:'no-store'});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const dados=await r.json();
+    if(!dados||!dados.current)throw new Error('resposta sem tempo atual');
+    E.clima={dados:dados,lat:lat,lon:lon,
+      lugar:lugar||(E.clima&&E.clima.fonte==='cidade'?E.clima.lugar:null)||'aqui',
+      quando:Date.now(),fonte:fonte||'gps'};
+    climaGuardar();climaPintar();
+  }catch(e){
+    /* Falha aqui é rotina, não defeito: fazenda fica sem sinal. Mantém o que
+       tinha e só avisa se a pessoa está olhando o cartão. */
+    if($('cClima').classList.contains('on'))
+      toast('Sem conseguir atualizar o tempo agora. Mostrando a última leitura.',4500);
+    climaPintar();
+  }finally{climaOcupado=false;}
+}
+function climaPeloGps(){
+  const c=E.clima;
+  if(c&&c.fonte==='cidade')return;          /* cidade escolhida manda */
+  if(!E.pos)return;
+  if(Date.now()-climaUltimaTentativa<60000)return;
+  const velho=!c||!c.quando||(Date.now()-c.quando)>CLIMA_VALIDADE;
+  const longe=c&&c.lat!=null&&dist([c.lon,c.lat],[E.pos.lon,E.pos.lat])>CLIMA_DISTANCIA;
+  if(velho||longe)climaBuscar(E.pos.lat,E.pos.lon,'aqui','gps');
+}
+$('clima').onclick=()=>{
+  climaPintarCartao();
+  abre('cClima');
+  $('climaBusca').style.display='none';
+  const c=E.clima;
+  if(!c||!c.quando||(Date.now()-c.quando)>CLIMA_VALIDADE){
+    if(c&&c.fonte==='cidade')climaBuscar(c.lat,c.lon,c.lugar,'cidade');
+    else if(E.pos)climaBuscar(E.pos.lat,E.pos.lon,'aqui','gps');
+    else if(!c)toast('Ligue o GPS ou escolha uma cidade para ver o tempo.',4000);
+  }
+};
+$('climaFechar').onclick=fechaTudo;
+$('climaBuscar').onclick=()=>{
+  const b=$('climaBusca');
+  b.style.display=b.style.display==='none'?'block':'none';
+  if(b.style.display==='block')$('climaNome').focus();
+};
+$('climaGps').onclick=()=>{
+  if(E.clima)E.clima.fonte='gps';
+  climaGuardar();
+  if(E.pos){climaUltimaTentativa=0;climaBuscar(E.pos.lat,E.pos.lon,'aqui','gps');toast('O tempo volta a seguir seu GPS.');}
+  else{ligarGps();toast('Ligando o GPS para pegar o tempo daqui.');}
+};
+let climaTimer=null;
+$('climaNome').oninput=()=>{
+  clearTimeout(climaTimer);
+  climaTimer=setTimeout(procurarCidade,450);
+};
+async function procurarCidade(){
+  const q=($('climaNome').value||'').trim();
+  const box=$('climaAchados');
+  if(q.length<3){box.innerHTML='';return;}
+  box.innerHTML='<div class="obs">procurando…</div>';
+  try{
+    const u='https://geocoding-api.open-meteo.com/v1/search?name='+encodeURIComponent(q)
+      +'&count=8&language=pt&format=json';
+    const r=await fetch(u);
+    const d=await r.json();
+    const achados=(d&&d.results)||[];
+    if(!achados.length){box.innerHTML='<div class="obs">Nenhuma cidade com esse nome.</div>';return;}
+    box.innerHTML='';
+    achados.forEach(a=>{
+      const el=document.createElement('div');el.className='cidres';
+      const onde=[a.admin1,a.country].filter(Boolean).join(' · ');
+      el.innerHTML=a.name+'<small>'+onde+'</small>';
+      el.onclick=()=>{
+        $('climaBusca').style.display='none';
+        $('climaNome').value='';box.innerHTML='';
+        climaUltimaTentativa=0;
+        climaBuscar(a.latitude,a.longitude,a.name,'cidade');
+        toast('Tempo de '+a.name+'. Toque em "Seguir meu GPS" para voltar ao automático.',5000);
+      };
+      box.appendChild(el);
+    });
+  }catch(e){
+    box.innerHTML='<div class="obs">Sem internet para procurar cidade agora.</div>';
+  }
+}
+climaCarregar();
+climaPintar();
+window.addEventListener('online',()=>{climaUltimaTentativa=0;climaPeloGps();});
+
+/* aviso logo na abertura: melhor saber antes de estar no meio do talhão.
+   Avisa aqui, não quando a pessoa já está tentando marcar um ponto. As
+   ferramentas que não dependem de GPS continuam valendo. */
+if(localEhArquivo()){
+  setTimeout(()=>{
+    $('titulo').textContent+=' · sem GPS (arquivo local)';
+    toast('Aberto como arquivo: o Android não libera GPS assim. Medir por toques e ver as linhas funcionam.',7000);
+  },1500);
+}
+
+/* recuperar a sessão: fechar o navegador no meio da roça não pode custar o dia */
+const CHAVE='mapeiaagro_campo';
+function guardar(){
+  try{localStorage.setItem(CHAVE,JSON.stringify({nome:E.nome,marcas:E.marcas,medicoes:E.medicoes}));}catch(e){}
+}
+setInterval(guardar,10000);
+window.addEventListener('beforeunload',guardar);
+(function(){
+  let s=null;try{s=localStorage.getItem(CHAVE);}catch(e){}
+  if(!s)return;
+  try{
+    const p=JSON.parse(s);
+    if((p.marcas&&p.marcas.length)||(p.medicoes&&p.medicoes.length)){
+      E.marcas=p.marcas||[];E.medicoes=p.medicoes||[];E.nome=p.nome||'';
+      desenharMarcas();
+      toast(E.marcas.length+' ponto(s) e '+E.medicoes.length+' medição(ões) da última vez.',5000);
+    }
+  }catch(e){}
+})();
+window.addEventListener('error',ev=>{
+  toast('Erro: '+(ev.message||'desconhecido'),6000);
+});
+</script>
+</body>
+</html>
