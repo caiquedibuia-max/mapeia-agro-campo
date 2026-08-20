@@ -1219,7 +1219,10 @@ if(localEhArquivo()){
    fundo vazio. Funciona, mas ninguém se localiza assim.
    ============================================================ */
 let swReg=null, temAtualizacao=false;
-if('serviceWorker' in navigator&&location.protocol==='https:'){
+/* isSecureContext, e nao 'protocol===https': localhost tambem e contexto
+   seguro e registra service worker. Exigir https literal deixava o app sem
+   como ser testado fora do ar. */
+if('serviceWorker' in navigator&&window.isSecureContext){
   window.addEventListener('load',async()=>{
     try{
       swReg=await navigator.serviceWorker.register('sw.js',{scope:'./'});
